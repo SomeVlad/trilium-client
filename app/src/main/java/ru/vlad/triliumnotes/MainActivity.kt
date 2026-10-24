@@ -10,6 +10,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
@@ -17,9 +18,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.vlad.triliumnotes.ui.ConnectionScreen
 import ru.vlad.triliumnotes.ui.ConnectionSettingsScreen
+import ru.vlad.triliumnotes.ui.LegalScreen
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import ru.vlad.triliumnotes.ui.NotesApp
 import ru.vlad.triliumnotes.ui.NotesTheme
 
@@ -53,10 +60,12 @@ class MainActivity : ComponentActivity() {
             NotesTheme {
                 val state by connection.state.collectAsStateWithLifecycle()
                 val services = state.services
+                var about by rememberSaveable { mutableStateOf(false) }
                 when {
                     state.restoring -> Surface { Box(Modifier.fillMaxSize()) }
                     services == null -> ConnectionScreen(state.busy, state.error, state.storageFailed,
-                        onResetStorage = connection::disconnect, onConnect = connection::connect)
+                        onResetStorage = connection::disconnect, onConnect = connection::connect,
+                        onAbout = { about = true })
                     else -> key(services) {
                         val notes = remember { connection.notesModel(services) }
                         var settings by rememberSaveable { mutableStateOf(false) }
@@ -67,9 +76,24 @@ class MainActivity : ComponentActivity() {
                             onDispose { if (model === notes) model = null }
                         }
                         if (settings) ConnectionSettingsScreen(services.serverUrl, sync.pendingCount,
-                            state.busy, state.error, onBack = { settings = false }, onDisconnect = connection::disconnect)
+                            state.busy, state.error, onBack = { settings = false }, onDisconnect = connection::disconnect,
+                            onAbout = { about = true })
                         else NotesApp(notes, onConnectionSettings = { settings = true })
                     }
+                }
+                if (about) Dialog(onDismissRequest = { about = false },
+                    properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+                    val view = LocalView.current
+                    val dark = isSystemInDarkTheme()
+                    SideEffect {
+                        (view.parent as? DialogWindowProvider)?.window?.let { window ->
+                            WindowCompat.getInsetsController(window, view).apply {
+                                isAppearanceLightStatusBars = !dark
+                                isAppearanceLightNavigationBars = !dark
+                            }
+                        }
+                    }
+                    LegalScreen(onBack = { about = false })
                 }
                 state.legacySession?.let { session ->
                     AlertDialog(onDismissRequest = {}, title = { Text("Заметки прежней версии") },

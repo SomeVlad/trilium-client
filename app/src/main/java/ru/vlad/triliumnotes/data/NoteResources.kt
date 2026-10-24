@@ -6,6 +6,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 import java.net.URI
@@ -65,35 +69,35 @@ class NoteResources(
 ) {
     private val directory = File(context.filesDir, "note-resources").apply { mkdirs() }
     private val locks = ConcurrentHashMap<String, Any>()
+    private val resourceLocks = ConcurrentHashMap<String, Mutex>()
 
     // WebView invokes this on its IO thread, never on the UI thread or through JavaScript.
     fun load(path: String): ResourceContent? {
         val target = resolveResourceTarget(path, serverUrl)
         return runCatching {
-            if (target != null) runBlocking { read(target) } else readPublicImage(path)
+            if (target != null) runBlocking { read(target) { it.inlineContent() } } else readPublicImage(path)
         }.getOrNull()
     }
 
     suspend fun loadNote(note: NoteMeta): CachedAttachment = withContext(Dispatchers.IO) {
         val target = ResourceTarget(note.id, false)
-        val content = read(target, resourceVersion(note))
-        export(target.cacheKey, content, note.title, note.mime)
+        read(target, resourceVersion(note)) { export(target.cacheKey, it, note.title, note.mime) }
     }
 
     suspend fun loadLinkedAttachment(path: String): CachedAttachment = withContext(Dispatchers.IO) {
         val target = requireNotNull(resolveResourceTarget(path, serverUrl)) { "Unsupported attachment link" }
         val name = runCatching { URI(path).path.substringAfterLast('/') }.getOrDefault("")
             .takeUnless { it in setOf("", "content", "download", target.id) } ?: "Вложение"
-        export(target.cacheKey, read(target), name, "application/octet-stream")
+        read(target) { export(target.cacheKey, it, name, "application/octet-stream") }
     }
 
     suspend fun prefetchNote(note: NoteMeta) {
-        read(ResourceTarget(note.id, false), resourceVersion(note), allowStaleOnError = false)
+        read(ResourceTarget(note.id, false), resourceVersion(note), allowStaleOnError = false) { Unit }
     }
 
     suspend fun prefetchAttachment(attachment: AttachmentMeta, owner: NoteMeta) {
         val version = attachment.blobId ?: listOf(owner.blobId.orEmpty(), owner.modifiedAt.orEmpty()).joinToString(":")
-        read(ResourceTarget(attachment.id, true), version, allowStaleOnError = false)
+        read(ResourceTarget(attachment.id, true), version, allowStaleOnError = false) { Unit }
     }
 
     /** Use the same persistent files as the WebView and native viewers. */
@@ -110,14 +114,14 @@ class NoteResources(
                 val imageElement = element.normalName() == "img" || element.normalName() == "image" ||
                     (element.normalName() == "source" && element.parent()?.normalName() == "picture") || attribute == "poster"
                 val publicImage = imageElement &&
-                    (path.startsWith("https://") || path.trimStart('/').startsWith("assets/"))
+                    (path.startsWith("https://") || runCatching { isDocResource(URI(path)) }.getOrDefault(false))
                 if (target != null || publicImage) paths += path
             }
         }
         paths.forEach { path ->
             val target = resolveResourceTarget(path, serverUrl)
             if (target != null && target.attachment && target.id in validatedAttachmentIds) return@forEach
-            if (target != null) read(target, allowStaleOnError = false)
+            if (target != null) read(target, allowStaleOnError = false) { Unit }
             else if (readPublicImage(path) == null) throw IOException("Не удалось сохранить изображение для офлайн-доступа")
         }
         paths.size
@@ -125,7 +129,12 @@ class NoteResources(
 
     private fun resourceVersion(note: NoteMeta) = note.blobId ?: note.modifiedAt.orEmpty()
 
-    private fun export(key: String, content: ResourceContent, title: String, fallbackMime: String): CachedAttachment {
+    private fun BinaryFile.inlineContent(): ResourceContent {
+        if (file.length() > MAX_INLINE_RESOURCE_BYTES) throw IOException("Ресурс превышает лимит просмотра 20 МиБ")
+        return ResourceContent(mimeType, file.inputStream().use { it.readResourceBytes() })
+    }
+
+    private suspend fun export(key: String, content: BinaryFile, title: String, fallbackMime: String): CachedAttachment {
         val mime = content.mimeType.takeUnless { it == "application/octet-stream" }
             ?: fallbackMime.ifBlank { "application/octet-stream" }
         // FileProvider supplies a normal extension to compatible Android apps.
@@ -141,13 +150,35 @@ class NoteResources(
             "video/mp4" -> ".mp4"
             else -> title.substringAfterLast('.', "").takeIf { it.matches(Regex("[A-Za-z0-9]{1,8}")) }?.let { ".$it" }.orEmpty()
         }
-        val export = File(directory, "$key$suffix")
-        if (!export.isFile || !export.readBytes().contentEquals(content.bytes)) write(export, content.bytes)
+        // The exported extension must never alias the .data/.mime/.version cache files.
+        val export = File(directory, "view_$key$suffix")
+        val coroutine = currentCoroutineContext()
+        synchronized(locks.getOrPut(key) { Any() }) {
+            val atomic = AtomicFile(export)
+            val output = atomic.startWrite()
+            try {
+                content.file.inputStream().use { input ->
+                    val chunk = ByteArray(8192)
+                    while (true) {
+                        coroutine.ensureActive()
+                        val count = input.read(chunk)
+                        if (count < 0) break
+                        output.write(chunk, 0, count)
+                    }
+                }
+                coroutine.ensureActive()
+                atomic.finishWrite(output)
+            } catch (error: Throwable) {
+                atomic.failWrite(output)
+                throw error
+            }
+        }
         return CachedAttachment(export, mime, title.ifBlank { "Вложение$suffix" })
     }
 
-    private suspend fun read(target: ResourceTarget, version: String? = null, allowStaleOnError: Boolean = true): ResourceContent = withContext(Dispatchers.IO) {
-        synchronized(locks.getOrPut(target.cacheKey) { Any() }) {
+    private suspend fun <T> read(target: ResourceTarget, version: String? = null, allowStaleOnError: Boolean = true,
+        consume: suspend (BinaryFile) -> T): T = withContext(Dispatchers.IO) {
+        resourceLocks.getOrPut(target.cacheKey) { Mutex() }.withLock {
             val file = File(directory, "${target.cacheKey}.data")
             val mimeFile = File(directory, "${target.cacheKey}.mime")
             val versionFile = File(directory, "${target.cacheKey}.version")
@@ -155,27 +186,34 @@ class NoteResources(
             val sameVersion = version == null || (versionFile.isFile && versionFile.readText() == version)
             if (cached && sameVersion && ((allowStaleOnError && version == null) ||
                     version != null || System.currentTimeMillis() - file.lastModified() < 300_000)) {
-                return@synchronized ResourceContent(mimeFile.readText(), file.readBytes())
+                return@withLock consume(BinaryFile(file, mimeFile.readText()))
             }
             val result = try {
-                runBlocking { if (target.attachment) api.getAttachmentContent(target.id) else api.getBinary(target.id) }
+                if (target.attachment) api.downloadAttachment(target.id, file) else api.downloadBinary(target.id, file)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (cached && allowStaleOnError) return@synchronized ResourceContent(mimeFile.readText(), file.readBytes())
+                if (cached && allowStaleOnError) return@withLock consume(BinaryFile(file, mimeFile.readText()))
                 throw error
             }
-            write(file, result.bytes)
             write(mimeFile, result.mimeType.toByteArray(Charsets.UTF_8))
             if (version != null) write(versionFile, version.toByteArray(Charsets.UTF_8))
-            ResourceContent(result.mimeType, result.bytes)
+            consume(result)
         }
+    }
+
+    private fun isDocResource(input: URI): Boolean {
+        if (input.isAbsolute || input.rawAuthority != null) return false
+        var resourcePath = input.path.orEmpty()
+        val basePath = runCatching { URI(serverUrl).path }.getOrNull().orEmpty().trimEnd('/')
+        if (basePath.isNotEmpty() && resourcePath.startsWith("$basePath/")) resourcePath = resourcePath.removePrefix(basePath)
+        return resourcePath.matches(Regex("/?assets/v[0-9A-Za-z._-]+/doc_notes/.+"))
     }
 
     // Public images are fetched by a completely separate client with no bearer token or cookies.
     private fun readPublicImage(path: String): ResourceContent? {
         val input = runCatching { URI(path) }.getOrNull() ?: return null
         val url = if (input.isAbsolute) input else {
-            if (!input.path.orEmpty().matches(Regex("/?assets/v[0-9A-Za-z._-]+/doc_notes/.+"))) return null
+            if (!isDocResource(input)) return null
             URI(serverUrl.trimEnd('/') + "/").resolve(input)
         }
         if (url.scheme != "https" || url.host.isNullOrBlank() || url.userInfo != null || url.path.split('/').any { it == ".." }) return null
@@ -183,23 +221,13 @@ class NoteResources(
         return synchronized(locks.getOrPut(key) { Any() }) {
             val file = File(directory, "$key.data")
             val mimeFile = File(directory, "$key.mime")
-            if (file.isFile && mimeFile.isFile) return@synchronized ResourceContent(mimeFile.readText(), file.readBytes())
+            if (file.isFile && mimeFile.isFile) return@synchronized BinaryFile(file, mimeFile.readText()).inlineContent()
             anonymousClient.newCall(Request.Builder().url(url.toASCIIString()).build()).execute().use { response ->
                 val mime = response.header("Content-Type").orEmpty().substringBefore(';').trim()
                 if (!response.isSuccessful || !mime.startsWith("image/")) return@synchronized null
                 val body = response.body ?: return@synchronized null
-                if (body.contentLength() > 20 * 1024 * 1024) return@synchronized null
-                val bytes = body.byteStream().use { inputStream ->
-                    val buffer = java.io.ByteArrayOutputStream()
-                    val chunk = ByteArray(8192)
-                    while (buffer.size() <= 20 * 1024 * 1024) {
-                        val count = inputStream.read(chunk)
-                        if (count < 0) break
-                        buffer.write(chunk, 0, count)
-                    }
-                    buffer.toByteArray()
-                }
-                if (bytes.size > 20 * 1024 * 1024) return@synchronized null
+                if (body.contentLength() > MAX_INLINE_RESOURCE_BYTES) return@synchronized null
+                val bytes = body.byteStream().use { it.readResourceBytes() }
                 write(file, bytes)
                 write(mimeFile, mime.toByteArray())
                 ResourceContent(mime, bytes)

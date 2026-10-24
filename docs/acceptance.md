@@ -1,6 +1,17 @@
 # Validation record
 
-This record includes validation of **0.4.0** runtime authentication and folders, followed by the earlier **0.3.5** baseline. It is not a claim that every Android device or Trilium version is supported. Public screenshots and the scenarios below use synthetic notes and attachments.
+This record includes validation of **0.4.1** publication changes, **0.4.0** runtime authentication and folders, and the earlier **0.3.5** baseline. It is not a claim that every Android device or Trilium version is supported. Public screenshots and the scenarios below use synthetic notes and attachments.
+
+## Version 0.4.1
+
+- 137 JVM tests passed with no failures or skips. New regression checks cover streaming large attachments, interrupted downloads preserving the previous cache, bounded text/inline responses, cache/export filename collisions, reverse-proxy subpath resources, unchanged tree refreshes avoiding disk rewrites, and recovery of local edits or children after a remote deletion.
+- Debug, instrumentation and signed release APKs compiled; release lint reported 0 errors and 21 warnings. Most warnings report newer dependency versions; the others concern Compose conventions, backup configuration and KTX convenience APIs.
+- An independent reviewer read all 23 application Kotlin files, editor integration, manifest/resources, Gradle build logic and release scripts. A 100 MiB response under a 64 MiB JVM heap now fails with a bounded I/O error instead of the previously reproduced out-of-memory crash.
+- Fourteen Python release/source-packaging tests passed. Actionlint accepted the pinned GitHub workflows. These local checks are distinct from a successful hosted GitHub Actions run.
+- 21 unique Android checks passed on an API 36 emulator: connection UI, lazy HTML/Markdown reading and editing, keyboard list input, attachment viewing/retry/cancellation, and license navigation/assets. The first run caught duplicate license keys; after fixing generation, both license checks passed again.
+- The debug and signed APKs each contain 65 unique, nonempty indexed license assets and no loopback test certificate. APK package/version and the existing release certificate were verified.
+- The signed APK installed over 0.4.0 without uninstalling. About and the offline GPL text opened in the minimized release build; light/dark screenshots were inspected.
+- See [publication review](publication-review.md) for publication scope, source packaging and remaining limits.
 
 ## Version 0.4.0
 
@@ -38,7 +49,7 @@ Folder and search scroll restoration passed using Android's system Back key comm
 - Deletion has no client-side undo. Unsupported special note types are described in the [README](../README.md).
 - Source-release configuration changes require their own build checks; the results above describe the app acceptance run, not a new run of that suite after every documentation change.
 
-The [synthetic screenshots](screenshots/) illustrate the UI. For reproducible local commands, see [CONTRIBUTING.md](../CONTRIBUTING.md); the [prepared CI workflow](../ci/build.yml) builds the runtime-configured APK and is not yet active.
+The [synthetic screenshots](screenshots/) illustrate the UI. For reproducible local commands, see [CONTRIBUTING.md](../CONTRIBUTING.md); the [build workflow](../.github/workflows/build.yml) validates the runtime-configured APK.
 
 ## Earlier source-preview preparation
 

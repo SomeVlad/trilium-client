@@ -40,6 +40,7 @@ fun SourceNoteEditor(
     onOpenNote: (String) -> Unit = {},
     onOpenLink: (String) -> Unit = {},
     resourceLoader: (String) -> EditorResource? = { null },
+    serverUrl: String = "",
 ) {
     key(noteKey) {
         var content by remember { mutableStateOf(initialContent) }
@@ -51,7 +52,7 @@ fun SourceNoteEditor(
                     initialMarkdown = content, isEditing = isEditing, readOnly = readOnly, controller = controller,
                     modifier = Modifier.fillMaxSize(), onTitleChanged = { localTitle = it; onTitleChanged(it) },
                     onHtmlChanged = { content = it; onContentChanged(it) },
-                    onOpenNote = onOpenNote, onOpenLink = onOpenLink, resourceLoader = resourceLoader)
+                    onOpenNote = onOpenNote, onOpenLink = onOpenLink, resourceLoader = resourceLoader, serverUrl = serverUrl)
             }
         } else {
             val style = MaterialTheme.typography.bodyLarge.copy(

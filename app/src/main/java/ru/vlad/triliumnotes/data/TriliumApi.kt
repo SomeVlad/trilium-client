@@ -1,7 +1,10 @@
 package ru.vlad.triliumnotes.data
 
+import android.util.AtomicFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -12,6 +15,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import java.io.IOException
+import java.io.File
+import java.io.InputStream
+import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -41,6 +47,7 @@ data class NoteDocument(
     val html: String,
     val pending: Boolean = false,
     val conflict: Boolean = false,
+    val remoteMissing: Boolean = false,
 )
 
 data class ChildrenResult(
@@ -61,6 +68,21 @@ data class AttachmentMeta(
 )
 
 data class BinaryContent(val bytes: ByteArray, val mimeType: String)
+data class BinaryFile(val file: File, val mimeType: String)
+
+internal const val MAX_INLINE_RESOURCE_BYTES = 20 * 1024 * 1024
+
+/** Used only by APIs whose caller explicitly needs an in-memory image. */
+internal fun InputStream.readResourceBytes(): ByteArray {
+    val result = ByteArrayOutputStream()
+    val chunk = ByteArray(8192)
+    while (true) {
+        val count = read(chunk, 0, minOf(chunk.size, MAX_INLINE_RESOURCE_BYTES - result.size() + 1))
+        if (count < 0) return result.toByteArray()
+        if (result.size() + count > MAX_INLINE_RESOURCE_BYTES) throw IOException("Ресурс превышает лимит просмотра 20 МиБ")
+        result.write(chunk, 0, count)
+    }
+}
 
 /** ETAPI cannot establish a protected session. Binary content is fetched separately. */
 val NoteMeta.hasTextContent: Boolean
@@ -154,6 +176,12 @@ class TriliumApi(
 
     suspend fun getAttachmentContent(attachmentId: String): BinaryContent =
         sendBytes(endpoint("attachments", attachmentId, "content"))
+
+    suspend fun downloadBinary(noteId: String, destination: File): BinaryFile =
+        download(endpoint("notes", noteId, "content"), destination)
+
+    suspend fun downloadAttachment(attachmentId: String, destination: File): BinaryFile =
+        download(endpoint("attachments", attachmentId, "content"), destination)
 
     suspend fun getAttachments(noteId: String): List<AttachmentMeta> {
         val items = org.json.JSONArray(send("GET", endpoint("notes", noteId, "attachments")))
@@ -250,11 +278,48 @@ class TriliumApi(
         val request = Request.Builder().url(url).header("Authorization", authorization).build()
         binaryClient.newCall(request).execute().use { response ->
             checkActive()
-            val bytes = response.body?.bytes() ?: byteArrayOf()
-            if (isKnownCrowdSecCaptchaPage(bytes.toString(Charsets.UTF_8)))
+            if (isKnownCrowdSecCaptchaPage(response.peekBody(65_536).string()))
                 throw UnexpectedHtmlResponseException(response.code)
             if (!response.isSuccessful) throw ApiException(response.code)
+            val body = response.body
+            if (body != null && body.contentLength() > MAX_INLINE_RESOURCE_BYTES)
+                throw IOException("Ресурс превышает лимит просмотра 20 МиБ")
+            val bytes = body?.byteStream()?.use { it.readResourceBytes() } ?: byteArrayOf()
             BinaryContent(bytes, response.header("Content-Type")?.substringBefore(';')?.trim()
+                ?: "application/octet-stream")
+        }
+    }
+
+    /** Native viewing and offline storage never materialize an attachment in memory. */
+    private suspend fun download(url: HttpUrl, destination: File): BinaryFile = withContext(Dispatchers.IO) {
+        checkActive()
+        val request = Request.Builder().url(url).header("Authorization", authorization).build()
+        binaryClient.newCall(request).execute().use { response ->
+            checkActive()
+            if (isKnownCrowdSecCaptchaPage(response.peekBody(65_536).string()))
+                throw UnexpectedHtmlResponseException(response.code)
+            if (!response.isSuccessful) throw ApiException(response.code)
+            val atomic = AtomicFile(destination)
+            val output = atomic.startWrite()
+            try {
+                response.body?.byteStream()?.use { input ->
+                    val chunk = ByteArray(8192)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        checkActive()
+                        val count = input.read(chunk)
+                        if (count < 0) break
+                        output.write(chunk, 0, count)
+                    }
+                }
+                currentCoroutineContext().ensureActive()
+                checkActive()
+                atomic.finishWrite(output)
+            } catch (error: Throwable) {
+                atomic.failWrite(output)
+                throw error
+            }
+            BinaryFile(destination, response.header("Content-Type")?.substringBefore(';')?.trim()
                 ?: "application/octet-stream")
         }
     }
@@ -274,7 +339,14 @@ class TriliumApi(
             .build()
         client.newCall(request).execute().use { response ->
             checkActive()
-            val body = response.body?.string().orEmpty()
+            // ETAPI metadata/text is kept in memory; file/image downloads use download().
+            val responseBody = response.body
+            if (responseBody != null && (responseBody.contentLength() > MAX_INLINE_RESOURCE_BYTES ||
+                    (responseBody.source().request(MAX_INLINE_RESOURCE_BYTES + 1L) &&
+                        responseBody.source().buffer.size > MAX_INLINE_RESOURCE_BYTES))) {
+                throw IOException("Ответ сервера превышает лимит 20 МиБ")
+            }
+            val body = responseBody?.string().orEmpty()
             if ((allowsHtmlBody && isKnownCrowdSecCaptchaPage(body)) ||
                 (!allowsHtmlBody && isHtmlInsteadOfJson(response.header("Content-Type"), body))) {
                 throw UnexpectedHtmlResponseException(response.code)

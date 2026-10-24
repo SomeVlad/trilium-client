@@ -71,6 +71,7 @@ fun RichNoteEditor(
     onOpenNote: (String) -> Unit = {},
     onOpenLink: (String) -> Unit = {},
     resourceLoader: (String) -> EditorResource? = { null },
+    serverUrl: String = "",
     controller: RichNoteEditorController? = null,
 ) {
     key(noteKey) {
@@ -82,6 +83,7 @@ fun RichNoteEditor(
         val latestOpenNote = rememberUpdatedState(onOpenNote)
         val latestOpenLink = rememberUpdatedState(onOpenLink)
         val latestResourceLoader = rememberUpdatedState(resourceLoader)
+        val latestServerUrl = rememberUpdatedState(serverUrl)
         val activeController = controller ?: rememberRichNoteEditorController()
         val delivery = remember { DeliveryState(initialHtml, title) }
         fun deliverHtml(value: String, revision: Long) {
@@ -187,7 +189,7 @@ fun RichNoteEditor(
                         }
                         val resourceUrl = if (uri.scheme == "https" && uri.host == EditorResourcePolicy.HOST &&
                             uri.path == "/_note_resource") uri.getQueryParameter("url") else null
-                        if (request.method == "GET" && resourceUrl != null && EditorResourcePolicy.isResourceUrl(resourceUrl)) {
+                        if (request.method == "GET" && resourceUrl != null && EditorResourcePolicy.isResourceUrl(resourceUrl, latestServerUrl.value)) {
                             val resource = try { latestResourceLoader.value(resourceUrl) } catch (_: Exception) { null }
                             if (resource != null) return WebResourceResponse(resource.mimeType, null, ByteArrayInputStream(resource.bytes))
                         }
@@ -273,13 +275,15 @@ private fun blocked() = WebResourceResponse("text/plain", "UTF-8", 404, "Not Fou
 /** Shared route boundary. The resource loader additionally validates the actual server origin. */
 object EditorResourcePolicy {
     const val HOST = "appassets.androidplatform.net"
-    fun isResourceUrl(value: String): Boolean {
+    fun isResourceUrl(value: String, serverUrl: String = ""): Boolean {
         val normalized = if (value.startsWith("/")) "https://$HOST$value" else if (!value.contains("://")) "https://$HOST/$value" else value
         val uri = try { java.net.URI(normalized) } catch (_: Exception) { return false }
         if (uri.scheme != "https" || uri.rawUserInfo != null || uri.rawFragment != null) return false
-        val path = uri.rawPath ?: return false
+        var path = uri.path ?: return false
         if (path.contains("..") || path.contains('\\')) return false
         if (uri.host != HOST && !uri.host.isNullOrBlank()) return true
+        val basePath = runCatching { java.net.URI(serverUrl).path }.getOrNull().orEmpty().trimEnd('/')
+        if (basePath.isNotEmpty() && path.startsWith("$basePath/")) path = path.removePrefix(basePath)
         return Regex("/(?:assets/v[0-9.]+/doc_notes/[^?#]+|api/images/[A-Za-z0-9_-]+/[^/]+|api/attachments/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[^/]+|api/attachments/[A-Za-z0-9_-]+/download|api/notes/[A-Za-z0-9_-]+/download|attachments/[A-Za-z0-9_-]+/[^/]+)").matches(path)
     }
     fun noteId(value: String): String? {

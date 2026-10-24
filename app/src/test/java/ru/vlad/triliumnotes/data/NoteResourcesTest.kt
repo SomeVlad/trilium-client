@@ -166,4 +166,90 @@ class NoteResourcesTest {
             "/etapi/attachments/attachCCCC/content"), paths)
         assertEquals(3, server.requestCount)
     }
+
+    @Test fun largeNativeFilesPrefetchExportAndRemainAvailableOfflineWithoutByteArrays() = runBlocking {
+        val size = MAX_INLINE_RESOURCE_BYTES.toLong() + 1024 * 1024
+        val body = GeneratedBinaryBody(size, declared = false)
+        val resources = NoteResources(context, binaryApi(body))
+        val note = NoteMeta("noteAAAA", "Video", "file", "video/mp4", false,
+            "blobAAAA", null, emptyList())
+        resources.prefetchNote(note)
+        assertEquals(size, File(directory, "note-resources/note_noteAAAA.data").length())
+        val emitted = body.emitted
+        resources.prefetchNote(note)
+        assertEquals(emitted, body.emitted)
+        val export = resources.loadNote(note)
+        assertEquals(size, export.file.length())
+        assertEquals("video/mp4", export.mimeType)
+        assertNull("WebView's in-memory view must stay bounded", resources.load("api/images/noteAAAA/video.mp4"))
+        val offline = OkHttpClient.Builder().addInterceptor { throw java.io.IOException("Offline") }.build()
+        val cached = NoteResources(context, TriliumApi("https://notes.example", "test-token", offline)).loadNote(note)
+        assertEquals(size, cached.file.length())
+    }
+
+    @Test fun interruptedAttachmentRefreshKeepsOldBytesAndVersion() = runBlocking {
+        val note = NoteMeta("ownerAAAA", "Owner", "text", "text/html", false,
+            "ownerBlob", null, emptyList())
+        val attachment = AttachmentMeta("attachAAAA", note.id, "file", "video/mp4", "Video", 0, "oldBlob")
+        server.enqueue(MockResponse().setHeader("Content-Type", "video/mp4").setBody("old-video"))
+        NoteResources(context, api).prefetchAttachment(attachment, note)
+        val failing = NoteResources(context, binaryApi(GeneratedBinaryBody(1024 * 1024, failAfter = 200_000)))
+        try {
+            failing.prefetchAttachment(attachment.copy(blobId = "newBlob"), note)
+            fail("Incomplete attachment must not be acknowledged as cached")
+        } catch (_: java.io.IOException) { }
+        assertEquals("old-video", File(directory, "note-resources/attachment_attachAAAA.data").readText())
+        assertEquals("oldBlob", File(directory, "note-resources/attachment_attachAAAA.version").readText())
+    }
+
+    @Test fun publicImageCacheAlsoRejectsOversizedFilesBeforeReading() {
+        val anonymous = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .header("Content-Type", "image/png").body("image".toResponseBody()).build()
+        }.build()
+        val resources = NoteResources(context, api, "https://notes.example", anonymous)
+        assertNotNull(resources.load("https://images.example/test.png"))
+        val cache = File(directory, "note-resources").listFiles()!!.single { it.name.startsWith("public_") && it.extension == "data" }
+        java.io.RandomAccessFile(cache, "rw").use { it.setLength(MAX_INLINE_RESOURCE_BYTES.toLong() + 1) }
+        assertNull(resources.load("https://images.example/test.png"))
+    }
+
+    @Test fun filenameExtensionsCannotOverwriteCacheDuringExport() = runBlocking {
+        val resources = NoteResources(context, api)
+        for (extension in listOf("data", "mime", "version")) {
+            val id = "note$extension"
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/octet-stream").setBody("native-file"))
+            val note = NoteMeta(id, "export.$extension", "file", "application/octet-stream", false,
+                "blobAAAA", null, emptyList())
+            val export = resources.loadNote(note)
+            val cache = File(directory, "note-resources/note_$id.data")
+            assertNotEquals(cache.canonicalFile, export.file.canonicalFile)
+            assertEquals("native-file", export.file.readText())
+            assertEquals("native-file", cache.readText())
+            assertEquals("application/octet-stream", File(directory, "note-resources/note_$id.mime").readText())
+            assertEquals("blobAAAA", File(directory, "note-resources/note_$id.version").readText())
+            assertEquals("native-file", resources.loadNote(note).file.readText())
+        }
+    }
+
+    @Test fun configuredServerSubpathPrefetchesAndLoadsDocumentationImagesAnonymously() = runBlocking {
+        var calls = 0
+        val anonymous = OkHttpClient.Builder().addInterceptor { chain ->
+            assertEquals("https://notes.example/notes/assets/v0.106.0/doc_notes/en/images/example.png", chain.request().url.toString())
+            assertNull(chain.request().header("Authorization"))
+            calls++
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .header("Content-Type", "image/png").body("documentation-image".toResponseBody()).build()
+        }.build()
+        val resources = NoteResources(context, api, "https://notes.example/notes", anonymous)
+        val path = "/notes/assets/v0.106.0/doc_notes/en/images/example.png"
+        assertEquals(1, resources.prefetchInline("<img src=\"$path\">"))
+        assertEquals("documentation-image", resources.load(path)!!.bytes.toString(Charsets.UTF_8))
+        assertEquals(1, calls)
+        assertNull(resources.load("/other/assets/v0.106.0/doc_notes/en/images/example.png"))
+        assertNull(resources.load("/notes/assets/v0.106.0/doc_notes/../private.png"))
+        assertEquals(1, calls)
+        assertEquals(ResourceTarget("noteAAAA", false), resolveResourceTarget("/notes/api/images/noteAAAA/example.png", "https://notes.example/notes"))
+        assertNull(resolveResourceTarget("https://foreign.example/notes/api/images/noteAAAA/example.png", "https://notes.example/notes"))
+    }
 }

@@ -551,7 +551,9 @@ internal fun EditorScreen(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             if (conflict) {
-                MessageCard("На сервере заметка изменилась. Ваш текст сохранён отдельно на телефоне.",
+                MessageCard(if (document.remoteMissing)
+                    "Сервер не нашёл заметку или её папку. Ваши данные сохранены на телефоне. Копия появится в корне заметок."
+                    else "На сервере заметка изменилась. Ваш текст сохранён отдельно на телефоне.",
                     "Сохранить копию", onKeepConflictAsCopy, Modifier.padding(horizontal = 20.dp))
             }
             state.error?.takeUnless { editing && localSaveFailed }?.let {
@@ -578,6 +580,7 @@ internal fun EditorScreen(
                     onOpenNote = onOpenNote,
                     onOpenLink = onOpenLink,
                     resourceLoader = resourceLoader,
+                    serverUrl = serverUrl,
                 )
             } else {
                 if (document.note.type == "mermaid") {
@@ -598,6 +601,7 @@ internal fun EditorScreen(
                     onOpenNote = onOpenNote,
                     onOpenLink = onOpenLink,
                     resourceLoader = resourceLoader,
+                    serverUrl = serverUrl,
                 )
             }
         }

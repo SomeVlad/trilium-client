@@ -2,18 +2,24 @@ name: Build and test
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
   debug:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify release automation
+        run: python3 -B -m unittest discover -s ci -p 'test_*.py'
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
@@ -23,16 +29,26 @@ jobs:
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - name: Build and test runtime connection setup
-        run: ./gradlew --no-daemon -PdemoBuild=true testDebugUnitTest assembleDebug
-      - name: Verify no build-time connection configuration
+        run: ./gradlew --no-daemon -PdemoBuild=true testDebugUnitTest lintDebug assembleDebug
+      - name: Verify runtime configuration and packaged licenses
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          from zipfile import ZipFile
           config = Path('app/build/generated/source/buildConfig/debug/ru/vlad/triliumnotes/BuildConfig.java').read_text()
           assert 'TRILIUM_TOKEN' not in config and 'TRILIUM_BASE_URL' not in config
           build = Path('app/build.gradle.kts').read_text()
           assert 'private.properties' not in build
           assert 'trilium.token' not in build and 'trilium.baseUrl' not in build
+          with ZipFile('app/build/outputs/apk/debug/app-debug.apk') as apk:
+              entries = [line.split('\t', 1) for line in apk.read('assets/licenses/index.txt').decode().splitlines()]
+              assert entries and all(len(entry) == 2 and entry[1] for entry in entries)
+              paths = [entry[0] for entry in entries]
+              assert len(paths) == len(set(paths)), 'Duplicate license paths'
+              assert {'licenses/LICENSE.txt', 'licenses/NOTICE.txt', 'editor/vendor/THIRD_PARTY_LICENSES.txt'} <= set(paths)
+              for path in paths:
+                  assert not path.startswith('/') and '..' not in path.split('/')
+                  assert apk.read('assets/' + path), 'Empty license asset: ' + path
           PY
       - name: Upload debug APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

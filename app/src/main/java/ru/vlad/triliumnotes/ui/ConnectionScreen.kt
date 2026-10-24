@@ -30,6 +30,7 @@ fun ConnectionScreen(
     error: String? = null,
     storageFailed: Boolean = false,
     onResetStorage: () -> Unit = {},
+    onAbout: () -> Unit = {},
     onConnect: (String, String, Boolean, Boolean) -> Unit,
 ) {
     var server by rememberSaveable { mutableStateOf("") }
@@ -111,6 +112,7 @@ fun ConnectionScreen(
                 if (storageFailed) {
                     TextButton(onClick = onResetStorage, enabled = !busy) { Text("Сбросить подключение") }
                 }
+                TextButton(onClick = onAbout) { Text("О приложении") }
             }
         }
     }
@@ -125,6 +127,7 @@ fun ConnectionSettingsScreen(
     error: String?,
     onBack: () -> Unit,
     onDisconnect: () -> Unit,
+    onAbout: () -> Unit = {},
 ) {
     var confirm by remember { mutableStateOf(false) }
     BackHandler { if (!busy) onBack() }
@@ -148,6 +151,7 @@ fun ConnectionSettingsScreen(
             Spacer(Modifier.height(24.dp))
             OutlinedButton(onClick = { confirm = true }, enabled = !busy,
                 modifier = Modifier.testTag("connection-disconnect")) { Text("Выйти / сменить сервер") }
+            TextButton(onClick = onAbout) { Text("О приложении") }
         }
     }
     if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text("Выйти из Trilium?") },

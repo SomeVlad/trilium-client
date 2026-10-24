@@ -18,3 +18,5 @@ signing.properties
 artifacts/
 captures/
 .cxx/
+__pycache__/
+release-assets/

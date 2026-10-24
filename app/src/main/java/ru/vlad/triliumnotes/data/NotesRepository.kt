@@ -250,6 +250,7 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
                 conflict = old?.conflict ?: false,
                 noteType = old?.noteType ?: stored.meta.type,
                 noteMime = old?.noteMime ?: stored.meta.mime,
+                remoteMissing = old?.remoteMissing ?: false,
             )
         }
         return requireNotNull(document(store, noteId))
@@ -341,7 +342,8 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
             val pending = next.pending[noteId]
                 ?: error("Нет ожидающей правки")
             require(pending.conflict) { "Конфликт не обнаружен" }
-            val parentId = pending.parentId ?: error("Неизвестна родительская заметка")
+            val parentId = if (pending.remoteMissing) "root" else
+                pending.parentId ?: error("Неизвестна родительская заметка")
             require(noteId !in deletionClosure(next) && parentId !in deletionClosure(next)) { "Заметка удалена" }
             next.counter++
             val copyTitle = pending.title + " (копия конфликта)"
@@ -352,6 +354,12 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
                 copyTitle, pending.html, null, null, next.counter,
                 noteType = pending.noteType, noteMime = pending.noteMime)
             next.pending.remove(noteId)
+            if (pending.remoteMissing) {
+                // A recovered copy must not leave a phantom server-deleted note in local search.
+                next.notes.remove(noteId)
+                next.children.remove(noteId)
+                next.children.replaceAll { _, items -> items.filterNot { it.note.id == noteId } }
+            }
         }
         return requireNotNull(document(store, copyId))
     }
@@ -368,8 +376,13 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
             val title = serverTitle(pending.title)
             if (!markCreateAttempt(pending, title)) return
             val staged = store.notes[pending.noteId]?.meta ?: return
-            remote = api.createNote(pending.noteId,
-                requireNotNull(pending.parentId), title, pending.html, staged.type, staged.mime)
+            remote = try { api.createNote(pending.noteId,
+                requireNotNull(pending.parentId), title, pending.html, staged.type, staged.mime) }
+            catch (error: ApiException) {
+                if (error.status != 404) throw error
+                markRemoteMissing(pending.noteId)
+                return
+            }
             remoteHtml = pending.html
         } else {
             val html = api.getContent(pending.noteId)
@@ -397,12 +410,22 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
     }
 
     private suspend fun syncUpdate(pending: Pending) {
-        val remote = api.getNote(pending.noteId)
+        val remote = try { api.getNote(pending.noteId) }
+        catch (error: ApiException) {
+            if (error.status != 404) throw error
+            markRemoteMissing(pending.noteId)
+            return
+        }
         if (!remote.isEditable || remote.type != pending.noteType || remote.mime != pending.noteMime) {
             markConflict(pending.noteId, remote, "")
             return
         }
-        val remoteHtml = api.getContent(pending.noteId)
+        val remoteHtml = try { api.getContent(pending.noteId) }
+        catch (error: ApiException) {
+            if (error.status != 404) throw error
+            markRemoteMissing(pending.noteId)
+            return
+        }
         val htmlHash = digest(remoteHtml)
         val contentChangedElsewhere = htmlHash != pending.baseHash && remoteHtml != pending.html
         val titleChangedElsewhere = remote.title != pending.baseTitle && remote.title != serverTitle(pending.title)
@@ -415,6 +438,12 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
         if (isDeleted(pending.noteId)) return
         if (remote.title != serverTitle(pending.title)) api.patchTitle(pending.noteId, serverTitle(pending.title))
         commitSynced(pending, api.getNote(pending.noteId), pending.html)
+    }
+
+    private suspend fun markRemoteMissing(noteId: String) = change { next ->
+        next.pending[noteId]?.takeIf { it.kind == "update" || it.kind == "create" }?.let {
+            next.pending[noteId] = it.copy(conflict = true, remoteMissing = true)
+        }
     }
 
     private suspend fun markCreateAttempt(snapshot: Pending, title: String): Boolean {
@@ -507,7 +536,7 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
                     if (parent == null) draft else draft.copy(parentId = parent)
                 }
             }
-            writeStore(next)
+            if (next != store) writeStore(next)
             store = next
             mutableSyncState.value = next.toSyncState(isSyncing = mutableSyncState.value.isSyncing)
         }
@@ -542,6 +571,7 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
             html = pending?.html ?: html,
             pending = pending != null,
             conflict = pending?.conflict == true,
+            remoteMissing = pending?.remoteMissing == true,
         )
     }
 
@@ -694,6 +724,7 @@ private data class Pending(
     val conflict: Boolean = false,
     val noteType: String = "text",
     val noteMime: String = "text/html",
+    val remoteMissing: Boolean = false,
 ) {
     fun toJson() = JSONObject().put("kind", kind).put("noteId", noteId)
         .put("branchId", branchId ?: JSONObject.NULL).put("parentId", parentId ?: JSONObject.NULL)
@@ -701,7 +732,7 @@ private data class Pending(
         .put("baseTitle", baseTitle ?: JSONObject.NULL)
         .put("baseHash", baseHash ?: JSONObject.NULL)
         .put("revision", revision).put("conflict", conflict)
-        .put("noteType", noteType).put("noteMime", noteMime)
+        .put("noteType", noteType).put("noteMime", noteMime).put("remoteMissing", remoteMissing)
 
     companion object {
         fun fromJson(json: JSONObject) = Pending(
@@ -715,6 +746,7 @@ private data class Pending(
             revision = json.getLong("revision"), conflict = json.optBoolean("conflict"),
             noteType = json.optString("noteType", "text"),
             noteMime = json.optString("noteMime", "text/html"),
+            remoteMissing = json.optBoolean("remoteMissing"),
         )
     }
 }
