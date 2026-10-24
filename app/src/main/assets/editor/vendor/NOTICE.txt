@@ -1,0 +1,8 @@
+CKEditor 5 version 49.0.0
+Copyright (c) 2003-2026 CKSource Holding sp. z o.o.
+Used under GPL-2.0-or-later. See LICENSE.md and GPL-2.0.txt.
+Official unmodified self-hosted distribution:
+https://cdn.ckeditor.com/ckeditor5/49.0.0/zip/ckeditor5-49.0.0.zip
+Bundled files: ckeditor5/ckeditor5.umd.js, ckeditor5/ckeditor5.css, translations/ru.umd.js
+Corresponding source: https://github.com/ckeditor/ckeditor5/tree/v49.0.0
+The integration code is in ../editor.js and ../editor.css.

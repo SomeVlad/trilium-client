@@ -1,0 +1,5 @@
+# Copy to private.properties for a build connected to your own Trilium server.
+# These values are compiled into the APK; keep configured APKs private.
+# The default/example endpoint is deliberately non-routable.
+trilium.baseUrl=https://trilium.invalid
+trilium.token=dummy-token

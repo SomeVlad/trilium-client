@@ -1,0 +1,60 @@
+:root { --background:#fffbff; --foreground:#221f26; --muted:#635d6b; --surface:#f3edf7; --border:#ded7e5; --accent:#70569a; color-scheme:light dark; }
+/* Personal GPL integration customization, 2026-10-23: hide the floating promotional badge. */
+.ck.ck-balloon-panel.ck-powered-by-balloon { display:none!important; }
+* { box-sizing:border-box; }
+html,body { margin:0; padding:0; background:var(--background); color:var(--foreground); font-family:Roboto,system-ui,sans-serif; font-size:17px; line-height:1.65; overflow-wrap:anywhere; }
+body { --ck-color-base-background:var(--background); --ck-color-base-foreground:var(--surface); --ck-color-text:var(--foreground); --ck-color-base-text:var(--foreground); --ck-color-base-border:var(--border); --ck-color-toolbar-background:var(--surface); --ck-color-toolbar-border:var(--border); --ck-color-button-default-hover-background:var(--border); --ck-color-input-background:var(--background); --ck-color-input-text:var(--foreground); --ck-color-focus-border:var(--accent); --ck-color-button-on-background:var(--border); --ck-color-button-on-color:var(--accent); }
+main { padding:14px 20px 80px; }
+#title { width:100%; display:block; padding:0; margin:0 0 18px; border:0; outline:0; background:transparent; color:var(--foreground); font:600 31px/1.2 Roboto,system-ui,sans-serif; resize:none; overflow:hidden; }
+#title[readonly] { pointer-events:none; }
+/* The reader shares content typography; constructing the editing UI is deferred until requested. */
+#preview { min-height:200px; overflow:auto; color:var(--foreground); }
+#preview>:first-child { margin-top:var(--ck-spacing-gap-comfortable); }
+#preview>:last-child { margin-bottom:var(--ck-spacing-gap-comfortable); }
+.ck.ck-editor__main>.ck-editor__editable { background:transparent; color:var(--foreground); border:0!important; box-shadow:none!important; padding:0; min-height:200px; }
+.ck-editor__top { position:fixed!important; bottom:8px; left:10px; right:10px; top:auto!important; z-index:50; margin:0; }
+.ck-editor__top .ck-sticky-panel__content { position:static!important; transform:none!important; width:auto!important; }
+body:not(.editing) .ck-editor__top, body:not(.body-focus) .ck-editor__top { display:none; }
+.ck.ck-toolbar { border-radius:12px!important; padding:5px!important; }
+.ck.ck-toolbar.ck-toolbar_grouping > .ck-toolbar__items { flex-wrap:nowrap!important; }
+.ck.ck-button { min-width:44px; min-height:48px; }
+.ck.ck-balloon-panel { max-width:calc(100vw - 16px); }
+.ck.ck-input { min-width:0; max-width:85vw; }
+/* Keep CKEditor's content (including its placeholder) on the app's body typography. */
+.ck-content { --ck-content-font-family:Roboto,system-ui,sans-serif; --ck-content-font-size:17px; --ck-content-line-height:1.65; }
+.ck-content p { margin:0 0 .9em; }
+.ck-content h1,.ck-content h2,.ck-content h3,.ck-content h4,.ck-content h5,.ck-content h6 { margin:1.05em 0 .45em; line-height:1.3; }
+.ck-content h1 { font-size:1.7em; }.ck-content h2 { font-size:1.4em; }.ck-content h3 { font-size:1.2em; }
+.ck-content ul,.ck-content ol { padding-left:1.65em; }
+.ck-content li { margin:.25em 0; }.ck-content li>p { margin-bottom:.3em; }
+/* Markdown task items already have a checkbox; a bullet would be a second marker. */
+.ck-content li.pocket-task-item { list-style:none; }
+.ck-content a { color:var(--accent); text-decoration:underline; cursor:pointer; }
+.ck-content img { max-width:100%; height:auto; }.ck-content figure.image { max-width:100%; }
+.ck-content blockquote { border-left:3px solid var(--accent); color:var(--muted); margin:1em 0; padding:.1em 0 .1em 1em; }
+.ck-content pre { background:var(--surface); color:var(--foreground); border:1px solid var(--border); border-radius:10px; padding:14px; white-space:pre-wrap; overflow-wrap:normal; overflow:auto; }
+.ck-content code { font-family:ui-monospace,monospace; font-size:.9em; }
+.ck-content :not(pre)>code { background:var(--surface); padding:2px 5px; border-radius:4px; }
+.ck-content .table { width:100%; overflow:auto; margin:1em 0; }.ck-content table { border-collapse:collapse; min-width:100%; }
+.ck-content td,.ck-content th { border:1px solid var(--border); padding:8px; min-width:50px; }.ck-content th { background:var(--surface); }
+.ck-content hr { border:0; border-top:1px solid var(--border); margin:1.4em 0; }
+.ck-content span[data-pocket-preserved] { display:inline-block; color:var(--muted); background:var(--surface); border:1px dashed var(--border); border-radius:6px; padding:0 6px; font-size:.8em; }
+#fallback { width:100%; min-height:60vh; background:var(--background); color:var(--foreground); border:1px solid var(--border); font:14px/1.6 monospace; }
+
+.ck-content [data-url]:empty,.ck-content oembed[url] { display:block; border:1px solid var(--border); background:var(--surface); border-radius:12px; padding:14px; cursor:pointer; }
+.ck-content [data-url]:empty::before { content:"Встроенный материал"; display:block; font-weight:600; }
+.ck-content [data-url]:empty::after { content:attr(data-url); display:block; color:var(--accent); font-size:.85em; }
+.ck-content oembed[url]::before { content:attr(url); color:var(--accent); }
+
+.ck-content span[data-pocket-embed-url] { display:block; width:100%; padding:16px; margin:1em 0; border:1px solid var(--border); border-radius:12px; line-height:1.5; cursor:pointer; }
+.ck-content span[data-pocket-embed-url]>span { color:var(--accent); font-size:.85em; }
+.ck-content [data-embed-type="opengraph"] { display:block; padding:16px; margin:1em 0; border:1px solid var(--border); background:var(--surface); border-radius:12px; cursor:pointer; }
+.ck-content [data-embed-type="opengraph"][data-title]::before { content:attr(data-title); display:block; color:var(--foreground); font-weight:600; line-height:1.4; margin-bottom:6px; }
+.ck-content [data-embed-type="opengraph"][data-description]::after { content:attr(data-description); display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; color:var(--muted); font-size:.9em; line-height:1.5; }
+
+/* The main toolbar is at the bottom; its overflow menu must fit above it on phones. */
+.ck-editor__top .ck-toolbar__grouped-dropdown > .ck-dropdown__panel {
+    top:auto!important; bottom:calc(100% + 4px)!important;
+    left:auto!important; right:0!important;
+    width:max-content; max-width:calc(100vw - 20px);
+}

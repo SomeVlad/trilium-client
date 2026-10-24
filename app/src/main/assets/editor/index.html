@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,interactive-widget=resizes-content">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'">
+<link rel="stylesheet" href="vendor/ckeditor5.css"><link rel="stylesheet" href="editor.css">
+<script src="editor.js" defer></script>
+</head><body>
+<main><textarea id="title" rows="1" aria-label="Название заметки" placeholder="Название" enterkeyhint="next" readonly></textarea>
+<div id="preview" class="ck-content" role="document"></div><div id="editor-host" hidden><div id="editor"></div></div>
+<p id="error" hidden>Не удалось открыть визуальный редактор. Исходный текст доступен ниже.</p><textarea id="fallback" aria-label="Исходный текст" hidden></textarea></main>
+</body></html>

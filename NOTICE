@@ -1,0 +1,15 @@
+trilium-client
+Copyright (C) 2026 trilium-client contributors
+
+Original project code is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See LICENSE for details.
+
+Third-party code remains under its original copyright and license terms.
+See THIRD_PARTY_NOTICES.md and app/src/main/assets/editor/vendor/.
+This project is independently developed and is not an official Trilium or
+CKSource product.

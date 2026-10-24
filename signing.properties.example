@@ -1,0 +1,7 @@
+# Optional: copy to signing.properties to sign release builds with your own key.
+# Without this file, debug builds use the standard Android debug key and release builds are unsigned.
+# Paths are relative to the repository root. Never commit keys or this completed file.
+storeFile=.private/release.p12
+storePassword=replace-with-your-store-password
+keyAlias=release
+keyPassword=replace-with-your-key-password

@@ -1,0 +1,20 @@
+.gradle/
+.kotlin/
+*.apk
+.idea/
+*.iml
+build/
+app/build/
+local.properties
+private.properties
+signing.properties
+.private/
+*.jks
+*.keystore
+*.p12
+# Synthetic localhost TLS certificate used only by instrumentation tests.
+!app/src/androidTest/assets/lifecycle-loopback.p12
+*.pfx
+artifacts/
+captures/
+.cxx/
