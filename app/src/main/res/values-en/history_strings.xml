@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="history_title">"Version history"</string>
+    <string name="history_save_current">"Save current version"</string>
+    <string name="history_empty">"This note has no saved versions on the server yet."</string>
+    <string name="history_unknown_date">"Unknown date"</string>
+    <string name="history_read_only">"Version preview"</string>
+    <string name="history_restore">"Restore"</string>
+    <string name="history_restore_title">"Restore this version?"</string>
+    <string name="history_restore_message">"The selected version will replace this note’s title and content. The current version, including unsent changes, will be saved to history first."</string>
+    <string name="history_saving">"Saving version…"</string>
+    <string name="history_preview_unavailable">"This version cannot be previewed in the app."</string>
+    <string name="history_load_error">"Could not load version history. Check your connection and retry."</string>
+    <string name="history_unavailable">"This server does not provide version history through ETAPI. Check the Trilium version."</string>
+    <string name="history_protected">"Protected versions are unavailable through ETAPI."</string>
+    <string name="history_save_error">"Could not save the current version. Changes are saved on your phone; retry after syncing."</string>
+    <string name="history_restore_error">"Could not restore the version. The note’s current content has been preserved."</string>
+    <string name="history_sync_first">"Send the current changes to the server first. You can restore a version after syncing."</string>
+    <string name="history_conflict_first">"Resolve the note conflict before restoring a version."</string>
+    <string name="history_before_restore">"Before restoring from the app"</string>
+</resources>

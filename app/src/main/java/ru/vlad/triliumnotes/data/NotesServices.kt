@@ -23,6 +23,12 @@ class NotesServices internal constructor(
     val repository = NotesRepository(context, api)
     val resources = NoteResources(context, api, serverUrl)
     val offline = OfflineSync(repository, api, resources, context)
+    @Volatile var attachmentInsertionHandler: (suspend (PendingAttachmentUpload, AttachmentMeta) -> Unit)? = null
+    val uploads = AttachmentUploadQueue(context, api, repository, resources) { upload, attachment ->
+        val handler = attachmentInsertionHandler
+        if (handler != null) handler(upload, attachment)
+        else repository.appendAttachmentReference(upload, attachment)
+    }
 
     companion object {
         @Volatile private var instance: NotesServices? = null

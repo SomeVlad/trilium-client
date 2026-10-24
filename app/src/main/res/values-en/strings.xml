@@ -15,7 +15,6 @@
     <string name="connecting">"Connecting…"</string>
     <string name="connect">"Connect"</string>
     <string name="reset_connection">"Reset connection"</string>
-    <string name="licenses">"Licenses"</string>
     <string name="connection">"Connection"</string>
     <string name="back">"Back"</string>
     <string name="trilium_server">"Trilium server"</string>
@@ -25,7 +24,6 @@
     <string name="disconnect_message">"Sync will stop. Local notes and unsent changes will stay on your phone."</string>
     <string name="sign_out">"Sign out"</string>
     <string name="cancel">"Cancel"</string>
-    <string name="license">"License"</string>
     <string name="sync_error">"Sync error"</string>
     <string name="no_internet">"No internet connection"</string>
     <string name="updating_notes">"Updating notes"</string>
@@ -162,13 +160,7 @@
     <string name="delete_title">"Delete “%1$s”?"</string>
     <string name="legacy_message">"An earlier local copy was found on this phone. Does it belong to server %1$s? Importing it will allow it to sync. Any existing downloaded copy of this server will be replaced if it has no unsent changes."</string>
     <string name="legacy_pending">"Unsent changes: %1$d."</string>
-    <string name="legal_copyright_terms">"Copyright and terms"</string>
-    <string name="legal_third_party">"Third-party components"</string>
     <string name="notes">Notes</string>
-    <string name="legal_editor_notice">CKEditor — origin and modifications</string>
-    <string name="legal_editor_components">CKEditor — component licenses</string>
-    <string name="legal_editor_gpl">CKEditor — GNU GPL</string>
-    <string name="legal_editor_dependencies">CKEditor — dependency notices</string>
     <string name="language">Language</string>
     <string name="language_russian">Русский</string>
     <string name="language_english">English</string>

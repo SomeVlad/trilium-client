@@ -58,10 +58,18 @@ class EditorScreenTest {
                     onSync = {}, onKeepConflictAsCopy = {}, onDelete = {})
             }
         }
-        compose.onNodeWithTag("note-actions-synthetic-note").assertIsNotEnabled()
+        compose.onNodeWithTag("note-actions-synthetic-note").performClick()
+        compose.onNodeWithText("Удалить").assertIsNotEnabled()
+        compose.onNodeWithTag("note-find").performClick()
+        compose.onNodeWithContentDescription("Закрыть поиск").performClick()
         compose.runOnIdle { state = state.copy(localWritePending = false) }
         compose.onNodeWithContentDescription("Редактировать заметку").performClick()
-        compose.onNodeWithTag("note-actions-synthetic-note").assertDoesNotExist()
+        compose.onNodeWithTag("note-actions-synthetic-note").performClick()
+        compose.onNodeWithTag("note-find").assertIsDisplayed()
+        compose.onNodeWithText("Удалить").assertDoesNotExist()
+        compose.onNodeWithTag("note-find").performClick()
+        compose.onNodeWithContentDescription("Закрыть поиск").performClick()
+        compose.onNodeWithContentDescription("Редактировать заметку").performClick()
         compose.onNodeWithText("Готово").performClick()
         compose.onNodeWithTag("note-actions-synthetic-note").assertIsDisplayed()
         compose.runOnIdle { state = state.copy(deletingNoteId = document.note.id) }

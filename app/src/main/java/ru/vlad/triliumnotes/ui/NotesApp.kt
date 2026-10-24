@@ -55,6 +55,7 @@ import ru.vlad.triliumnotes.Folder
 import ru.vlad.triliumnotes.NotesScreenState
 import ru.vlad.triliumnotes.NotesViewModel
 import ru.vlad.triliumnotes.data.CachedAttachment
+import ru.vlad.triliumnotes.data.AttachmentUploadState
 import ru.vlad.triliumnotes.data.NoteDocument
 import ru.vlad.triliumnotes.data.NoteMeta
 import ru.vlad.triliumnotes.data.SyncState
@@ -66,6 +67,8 @@ import ru.vlad.triliumnotes.editor.rememberRichNoteEditorController
 import ru.vlad.triliumnotes.editor.RichNoteEditor
 import ru.vlad.triliumnotes.editor.SourceNoteEditor
 import ru.vlad.triliumnotes.editor.EditorResource
+import ru.vlad.triliumnotes.editor.NoteSearchBar
+import ru.vlad.triliumnotes.editor.rememberNoteSearchState
 
 @Composable
 fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
@@ -73,6 +76,9 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
     val state by model.state.collectAsStateWithLifecycle()
     val sync by model.syncState.collectAsStateWithLifecycle()
     val offline by model.offlineState.collectAsStateWithLifecycle()
+    val upload by model.uploadState.collectAsStateWithLifecycle()
+    val history by model.historyState.collectAsStateWithLifecycle()
+    var attachmentOwner by rememberSaveable { mutableStateOf<String?>(null) }
     var attachmentUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var linkError by remember { mutableStateOf<String?>(null) }
     fun openLink(value: String) {
@@ -92,7 +98,9 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
         catch (_: ActivityNotFoundException) { linkError = AppLanguage.get(context, R.string.link_no_app) }
         catch (_: SecurityException) { linkError = AppLanguage.get(context, R.string.link_open_error) }
     }
-    BackHandler(state.document != null || state.openingNoteId != null || state.folders.size > 1 || state.query.isNotEmpty()) { model.back() }
+    BackHandler(state.operationBusy || state.document != null || state.openingNoteId != null || state.folders.size > 1 || state.query.isNotEmpty()) {
+        if (!state.operationBusy) model.back()
+    }
     val document = state.document
     val libraryState = rememberSaveableStateHolder()
     if (document == null) {
@@ -100,12 +108,12 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
         LibraryScreen(state, sync, onBack = model::back, onSearch = model::search,
             onRefresh = model::refreshAll, onSync = model::syncNow, onCreate = model::create,
             onOpen = model::open, onFolder = model::enterFolder, onOpenFolderContent = model::openCurrentFolder,
-            offline = offline,
+            offline = offline, uploadState = upload,
             onOpenConflict = { sync.conflicts.firstOrNull()?.let(model::openById) }, onDelete = model::delete,
             listState = listState, onCreateFolder = model::createFolder,
             onConnectionSettings = onConnectionSettings)
     } else {
-        key(document.note.id) {
+        NoteEditorHost(document.note.id) {
             EditorScreen(state, document, sync, onBack = model::back,
                 onTitleChanged = { model.editTitle(document.note.id, it) },
                 onHtmlChanged = { model.editHtml(document.note.id, it) },
@@ -113,7 +121,22 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
                 onOpenNote = model::openById, onOpenLink = ::openLink,
                 resourceLoader = { path -> model.loadResource(path)?.let { EditorResource(it.mimeType, it.bytes) } },
                 attachmentLoader = model::loadAttachment, onRetryLocalSave = model::retryLocalSave,
-                onDelete = { model.delete(document.note) }, serverUrl = model.serverUrl)
+                onDelete = { model.delete(document.note) }, serverUrl = model.serverUrl,
+                uploadState = upload, onHistory = { model.openHistory(document.note.id) },
+                onAttachmentPickStarted = { attachmentOwner = document.note.id },
+                onAttachment = { uri, inlineImage ->
+                    attachmentOwner?.let { owner -> model.stageAttachment(owner, uri, inlineImage) }
+                    attachmentOwner = null
+                }, onEditingChanged = { model.setEditing(document.note.id, it) })
+        }
+    }
+    history?.let { historyState ->
+        model.historyNote?.let { note ->
+            NoteHistorySheet(note, historyState, onSelect = model::selectRevision,
+                onRestore = model::restoreRevision, onSaveRevision = model::saveCurrentVersion,
+                onRetry = model::retryHistory, onBack = model::historyBack, onDismiss = model::closeHistory,
+                resourceLoader = { path -> model.loadResource(path)?.let { EditorResource(it.mimeType, it.bytes) } },
+                serverUrl = model.serverUrl)
         }
     }
     attachmentUrl?.let { url ->
@@ -139,6 +162,12 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
         AlertDialog(onDismissRequest = { linkError = null }, text = { Text(message) },
             confirmButton = { TextButton(onClick = { linkError = null }) { Text(AppLanguage.get(context, R.string.close)) } })
     }
+}
+
+/** Keep picker registrations and toolbar state alive when only the editor body is replaced. */
+@Composable
+internal fun NoteEditorHost(noteId: String, content: @Composable () -> Unit) {
+    key(noteId) { content() }
 }
 
 /** The root label belongs to the UI; all other folder names belong to the user. */
@@ -170,6 +199,7 @@ internal fun LibraryScreen(
     listState: LazyListState = rememberLazyListState(),
     onCreateFolder: ((String) -> Unit)? = null,
     onConnectionSettings: (() -> Unit)? = null,
+    uploadState: AttachmentUploadState = AttachmentUploadState(),
 ) {
     val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
@@ -264,6 +294,9 @@ internal fun LibraryScreen(
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("note-list"), state = listState,
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 100.dp)) {
+            if (uploadState.pendingCount > 0 || uploadState.error != null) {
+                item(key = "attachment-uploads") { AttachmentUploadStatus(uploadState, onSync) }
+            }
             if (offline.isRunning && !offline.available) {
                 item(key = "offline-progress") { InitialOfflineProgress(offline, Modifier.padding(bottom = 12.dp)) }
             }
@@ -478,10 +511,15 @@ internal fun EditorScreen(
     onRetryLocalSave: () -> Unit = {},
     onDelete: (() -> Unit)? = null,
     serverUrl: String = "",
+    onHistory: (() -> Unit)? = null,
+    onAttachment: ((Uri, Boolean) -> Unit)? = null,
+    onAttachmentPickStarted: () -> Unit = {},
+    onEditingChanged: (Boolean) -> Unit = {},
+    uploadState: AttachmentUploadState = AttachmentUploadState(),
 ) {
     val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
-    val initialHtml = remember { document.html }
+    val initialHtml = remember(document.note.id, state.editorEpoch) { document.html }
     val htmlNote = document.note.type == "doc" ||
         (document.note.type == "text" && document.note.mime.substringBefore(';') == "text/html")
     val attachment = document.note.type == "image" || document.note.type == "file"
@@ -496,28 +534,45 @@ internal fun EditorScreen(
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val editorController = rememberRichNoteEditorController()
+    val searchState = rememberNoteSearchState(document.note.id)
+    var searchVisible by rememberSaveable(document.note.id) { mutableStateOf(false) }
+    val searchable = !document.note.isProtected && !attachment && (htmlNote || !readOnly)
+    val canAttach = !readOnly && !conflict && (htmlNote || document.note.mime.contains("markdown", ignoreCase = true))
+    val latestEditingChanged = rememberUpdatedState(onEditingChanged)
+    LaunchedEffect(editing) { latestEditingChanged.value(editing) }
+    DisposableEffect(document.note.id) { onDispose { latestEditingChanged.value(false) } }
     var flushing by remember { mutableStateOf(false) }
     var showDeleteConfirmation by remember(document.note.id) { mutableStateOf(false) }
-    fun finishEditing() {
-        if (flushing) return
+    fun finishEditing(after: () -> Unit = onSync) {
+        if (flushing || state.operationBusy) return
         flushing = true
         editorController.flush {
             focusManager.clearFocus()
             keyboard?.hide()
             editing = false
+            latestEditingChanged.value(false)
             flushing = false
-            onSync()
+            after()
         }
     }
+    fun closeSearch() {
+        searchVisible = false
+        focusManager.clearFocus()
+        keyboard?.hide()
+    }
     fun retrySaving() {
-        if (flushing) return
+        if (flushing || state.operationBusy) return
         flushing = true
         editorController.flush {
             flushing = false
             onRetryLocalSave()
         }
     }
-    BackHandler(editing) { finishEditing() }
+    BackHandler(editing || searchVisible || flushing || state.operationBusy) {
+        if (!state.operationBusy && !flushing) {
+            if (searchVisible) closeSearch() else finishEditing()
+        }
+    }
     Scaffold(
         modifier = Modifier.imePadding(),
         topBar = {
@@ -537,99 +592,136 @@ internal fun EditorScreen(
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }, navigationIcon = {
-                IconButton(onClick = { if (editing) finishEditing() else onBack() }, enabled = !flushing && (editing || !state.localWritePending)) {
+                IconButton(onClick = { if (searchVisible) closeSearch() else if (editing) finishEditing() else onBack() },
+                    enabled = !state.operationBusy && !flushing && (editing || !state.localWritePending)) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, if (editing) AppLanguage.get(context, R.string.finish_editing) else AppLanguage.get(context, R.string.back_to_notes))
                 }
             }, actions = {
                 if (editing && localSaveFailed) {
-                    TextButton(onClick = ::retrySaving, enabled = !flushing,
+                    TextButton(onClick = ::retrySaving, enabled = !flushing && !state.operationBusy,
                         modifier = Modifier.semantics { contentDescription = AppLanguage.get(context, R.string.retry_save) }) {
                         Text(AppLanguage.get(context, R.string.retry))
                     }
                 }
-                if (document.pending && !flushing && !state.localWritePending && !conflict) {
+                if (document.pending && !flushing && !state.operationBusy && !state.localWritePending && !conflict) {
                     PendingNoteStatusControl(sync, state.networkAvailable, onSync)
                 }
+                if (canAttach && onAttachment != null) {
+                    AttachmentPicker(enabled = !flushing && !state.operationBusy && !state.uploadStaging && state.deletingNoteId == null,
+                        onPickStarted = {
+                            onAttachmentPickStarted()
+                            closeSearch()
+                            finishEditing(after = {})
+                        }, onPicked = onAttachment)
+                }
                 if (!readOnly) {
-                    if (editing) TextButton(onClick = ::finishEditing, enabled = !flushing) { Text(AppLanguage.get(context, R.string.done)) }
-                    else IconButton(onClick = { editing = true }) { Icon(Icons.Outlined.Edit, AppLanguage.get(context, R.string.edit_note)) }
+                    if (editing) TextButton(onClick = { finishEditing() }, enabled = !flushing && !state.operationBusy) {
+                        Text(AppLanguage.get(context, R.string.done))
+                    } else IconButton(onClick = {
+                        closeSearch()
+                        editing = true
+                        latestEditingChanged.value(true)
+                    }, enabled = !flushing && !state.operationBusy) {
+                        Icon(Icons.Outlined.Edit, AppLanguage.get(context, R.string.edit_note))
+                    }
                 }
-                if (!editing) {
-                    NoteActionsMenu(document.note, onDelete?.let { { showDeleteConfirmation = true } },
-                        enabled = !flushing && !state.localWritePending && state.deletingNoteId == null)
-                }
+                NoteActionsMenu(document.note,
+                    onDelete = if (!editing) onDelete?.let { { showDeleteConfirmation = true } } else null,
+                    enabled = !flushing && !state.operationBusy && state.deletingNoteId == null,
+                    deleteEnabled = !state.localWritePending,
+                    onSearch = if (searchable) ({ finishEditing { searchVisible = true } }) else null,
+                    onHistory = if (searchable && onHistory != null) ({
+                        closeSearch()
+                        finishEditing(onHistory)
+                    }) else null)
             }, colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.background))
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            if (searchVisible) NoteSearchBar(searchState, onClose = ::closeSearch)
+            if (state.uploadStaging) Text(AppLanguage.get(context, R.string.msg_upload_staging),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
+            if (uploadState.pendingCount > 0 || uploadState.error != null) {
+                AttachmentUploadStatus(uploadState, onSync, enabled = !state.operationBusy)
+            }
             if (conflict) {
                 MessageCard(if (document.remoteMissing)
                     AppLanguage.get(context, R.string.conflict_remote_missing)
                     else AppLanguage.get(context, R.string.conflict_remote_changed),
-                    AppLanguage.get(context, R.string.save_copy), onKeepConflictAsCopy, Modifier.padding(horizontal = 20.dp))
+                    AppLanguage.get(context, R.string.save_copy),
+                    if (state.operationBusy) null else onKeepConflictAsCopy, Modifier.padding(horizontal = 20.dp))
             }
             state.error?.takeUnless { editing && localSaveFailed }?.let {
                 MessageCard(it, action = AppLanguage.get(context, R.string.retry_save),
                     onRetry = if (state.localWritePending) ::retrySaving else null,
                     modifier = Modifier.padding(horizontal = 20.dp))
             }
-            if (document.note.isProtected || (readOnly && !htmlNote && !attachment)) {
-                SpecialNoteContent(document.note, initialHtml, onOpenLink, Modifier.fillMaxWidth().weight(1f), serverUrl)
-            } else if (attachment) {
-                AttachmentViewer(document.note, attachmentLoader, Modifier.fillMaxWidth().weight(1f))
-            } else if (htmlNote) {
-                RichNoteEditor(
-                    noteKey = document.note.id,
-                    title = editorTitle,
-                    initialFocusTitle = untouchedNewTitle,
-                    initialHtml = initialHtml,
-                    controller = editorController,
-                    readOnly = readOnly,
-                    isEditing = editing,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    onTitleChanged = { if (!readOnly) onTitleChanged(it) },
-                    onHtmlChanged = { if (!readOnly) onHtmlChanged(it) },
-                    onOpenNote = onOpenNote,
-                    onOpenLink = onOpenLink,
-                    resourceLoader = resourceLoader,
-                    serverUrl = serverUrl,
-                )
-            } else {
-                if (document.note.type == "mermaid") {
-                    Text(AppLanguage.get(context, R.string.diagram_source), Modifier.padding(horizontal = 22.dp, vertical = 6.dp),
-                        style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+            key(document.note.id, state.editorEpoch) {
+                if (document.note.isProtected || (readOnly && !htmlNote && !attachment)) {
+                    SpecialNoteContent(document.note, initialHtml, onOpenLink, Modifier.fillMaxWidth().weight(1f), serverUrl)
+                } else if (attachment) {
+                    AttachmentViewer(document.note, attachmentLoader, Modifier.fillMaxWidth().weight(1f))
+                } else if (htmlNote) {
+                    RichNoteEditor(
+                        noteKey = document.note.id,
+                        title = editorTitle,
+                        initialFocusTitle = untouchedNewTitle,
+                        initialHtml = initialHtml,
+                        controller = editorController,
+                        readOnly = readOnly || state.operationBusy,
+                        isEditing = editing && !state.operationBusy,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        onTitleChanged = { if (!readOnly && !state.operationBusy) onTitleChanged(it) },
+                        onHtmlChanged = { if (!readOnly && !state.operationBusy) onHtmlChanged(it) },
+                        onOpenNote = { if (!state.operationBusy && !flushing) onOpenNote(it) },
+                        onOpenLink = { if (!state.operationBusy && !flushing) onOpenLink(it) },
+                        resourceLoader = resourceLoader,
+                        serverUrl = serverUrl,
+                        searchState = if (searchVisible) searchState else null,
+                    )
+                } else {
+                    if (document.note.type == "mermaid") {
+                        Text(AppLanguage.get(context, R.string.diagram_source), Modifier.padding(horizontal = 22.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+                    }
+                    SourceNoteEditor(
+                        noteKey = document.note.id,
+                        title = document.note.title,
+                        initialContent = initialHtml,
+                        controller = editorController,
+                        mime = document.note.mime,
+                        readOnly = readOnly || state.operationBusy,
+                        isEditing = editing && !state.operationBusy,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        onTitleChanged = { if (!readOnly && !state.operationBusy) onTitleChanged(it) },
+                        onContentChanged = { if (!readOnly && !state.operationBusy) onHtmlChanged(it) },
+                        onOpenNote = { if (!state.operationBusy && !flushing) onOpenNote(it) },
+                        onOpenLink = { if (!state.operationBusy && !flushing) onOpenLink(it) },
+                        resourceLoader = resourceLoader,
+                        serverUrl = serverUrl,
+                        searchState = if (searchVisible) searchState else null,
+                    )
                 }
-                SourceNoteEditor(
-                    noteKey = document.note.id,
-                    title = document.note.title,
-                    initialContent = initialHtml,
-                    controller = editorController,
-                    mime = document.note.mime,
-                    readOnly = readOnly,
-                    isEditing = editing,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    onTitleChanged = { if (!readOnly) onTitleChanged(it) },
-                    onContentChanged = { if (!readOnly) onHtmlChanged(it) },
-                    onOpenNote = onOpenNote,
-                    onOpenLink = onOpenLink,
-                    resourceLoader = resourceLoader,
-                    serverUrl = serverUrl,
-                )
             }
         }
     }
     if (showDeleteConfirmation) {
         DeleteNoteDialog(document.note, onDismiss = { showDeleteConfirmation = false }, onConfirm = {
             showDeleteConfirmation = false
-            onDelete?.invoke()
+            if (!state.operationBusy && !state.localWritePending) onDelete?.invoke()
         })
     }
 }
 
 @Composable
-private fun NoteActionsMenu(note: NoteMeta, onDelete: (() -> Unit)?, enabled: Boolean = true) {
+private fun NoteActionsMenu(
+    note: NoteMeta, onDelete: (() -> Unit)?, enabled: Boolean = true,
+    deleteEnabled: Boolean = true, onSearch: (() -> Unit)? = null, onHistory: (() -> Unit)? = null,
+) {
     val context = LocalContext.current
-    if (onDelete == null || !note.canDelete) return
+    val hasDelete = onDelete != null && note.canDelete
+    if (!hasDelete && onSearch == null && onHistory == null) return
     var expanded by remember(note.id) { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }, enabled = enabled,
@@ -637,9 +729,34 @@ private fun NoteActionsMenu(note: NoteMeta, onDelete: (() -> Unit)?, enabled: Bo
             Icon(Icons.Outlined.MoreVert, AppLanguage.get(context, R.string.note_actions, note.title.ifBlank { AppLanguage.get(context, R.string.untitled) }))
         }
         DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.delete), color = MaterialTheme.colorScheme.error) },
-                leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error) },
-                onClick = { expanded = false; onDelete() })
+            if (onSearch != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.note_search)) },
+                leadingIcon = { Icon(Icons.Outlined.Search, null) }, modifier = Modifier.testTag("note-find"),
+                onClick = { expanded = false; onSearch() })
+            if (onHistory != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.history_title)) },
+                leadingIcon = { Icon(Icons.Outlined.History, null) }, modifier = Modifier.testTag("note-history"),
+                onClick = { expanded = false; onHistory() })
+            if (hasDelete) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.delete), color = MaterialTheme.colorScheme.error) },
+                leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error) }, enabled = deleteEnabled,
+                onClick = { expanded = false; onDelete?.invoke() })
+        }
+    }
+}
+
+@Composable
+private fun AttachmentUploadStatus(state: AttachmentUploadState, onRetry: () -> Unit, enabled: Boolean = true) {
+    val context = LocalContext.current
+    Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 5.dp).testTag("attachment-upload-status"),
+        verticalAlignment = Alignment.CenterVertically) {
+        if (state.isSyncing) {
+            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(state.error ?: AppLanguage.get(context, R.string.msg_upload_pending, state.pendingCount),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (state.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f))
+        if (state.error != null) TextButton(onClick = onRetry, enabled = enabled && !state.isSyncing) {
+            Text(AppLanguage.get(context, R.string.retry))
         }
     }
 }

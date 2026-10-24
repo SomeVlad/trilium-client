@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="history_title">"История версий"</string>
+    <string name="history_save_current">"Сохранить текущую версию"</string>
+    <string name="history_empty">"У этой заметки пока нет сохранённых версий на сервере."</string>
+    <string name="history_unknown_date">"Дата неизвестна"</string>
+    <string name="history_read_only">"Просмотр версии"</string>
+    <string name="history_restore">"Восстановить"</string>
+    <string name="history_restore_title">"Восстановить эту версию?"</string>
+    <string name="history_restore_message">"Заголовок и содержимое заметки будут заменены выбранной версией. Текущая версия, включая неотправленные изменения, сначала сохранится в истории."</string>
+    <string name="history_saving">"Сохранение версии…"</string>
+    <string name="history_preview_unavailable">"Эту версию нельзя просмотреть в приложении."</string>
+    <string name="history_load_error">"Не удалось загрузить историю. Проверьте подключение и повторите."</string>
+    <string name="history_unavailable">"Сервер не предоставляет историю через ETAPI. Проверьте версию Trilium."</string>
+    <string name="history_protected">"Защищённые версии недоступны через ETAPI."</string>
+    <string name="history_save_error">"Не удалось сохранить текущую версию. Изменения сохранены на телефоне; повторите после синхронизации."</string>
+    <string name="history_restore_error">"Не удалось восстановить версию. Текущее содержимое заметки сохранено."</string>
+    <string name="history_sync_first">"Сначала отправьте текущие изменения на сервер. После синхронизации можно восстановить версию."</string>
+    <string name="history_conflict_first">"Сначала разрешите конфликт заметки, затем повторите восстановление."</string>
+    <string name="history_before_restore">"Перед восстановлением из приложения"</string>
+</resources>

@@ -6,12 +6,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -24,6 +27,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.vlad.triliumnotes.AppLanguage
@@ -46,6 +52,7 @@ fun SourceNoteEditor(
     onOpenLink: (String) -> Unit = {},
     resourceLoader: (String) -> EditorResource? = { null },
     serverUrl: String = "",
+    searchState: NoteSearchState? = null,
 ) {
     val context = LocalContext.current
     val titleDescription = AppLanguage.get(context, R.string.editor_note_title)
@@ -60,14 +67,38 @@ fun SourceNoteEditor(
                     initialMarkdown = content, isEditing = isEditing, readOnly = readOnly, controller = controller,
                     modifier = Modifier.fillMaxSize(), onTitleChanged = { localTitle = it; onTitleChanged(it) },
                     onHtmlChanged = { content = it; onContentChanged(it) },
-                    onOpenNote = onOpenNote, onOpenLink = onOpenLink, resourceLoader = resourceLoader, serverUrl = serverUrl)
+                    onOpenNote = onOpenNote, onOpenLink = onOpenLink, resourceLoader = resourceLoader, serverUrl = serverUrl,
+                    searchState = searchState)
             }
         } else {
             val style = MaterialTheme.typography.bodyLarge.copy(
                 color = MaterialTheme.colorScheme.onBackground, fontFamily = FontFamily.Monospace,
                 fontSize = 15.sp, lineHeight = 24.sp,
             )
-            Column(modifier.verticalScroll(rememberScrollState()).testTag(if (editable) "note-source-editor" else "note-source-reader")
+            val scroll = rememberScrollState()
+            val bringMatchIntoView = remember { BringIntoViewRequester() }
+            val matches = remember(content, searchState?.query) { noteSearchMatches(content, searchState?.query.orEmpty()) }
+            var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+            LaunchedEffect(searchState, matches) { searchState?.updateResults(matches.size) }
+            val activeMatch = searchState?.currentMatch ?: -1
+            val searchColors = MaterialTheme.colorScheme
+            val highlighted = remember(content, matches, activeMatch, searchColors) {
+                buildAnnotatedString {
+                    append(content)
+                    matches.forEachIndexed { index, range ->
+                        addStyle(if (index == activeMatch) SpanStyle(background = searchColors.primary, color = searchColors.onPrimary)
+                            else SpanStyle(background = searchColors.tertiaryContainer, color = searchColors.onTertiaryContainer),
+                            range.first, range.last + 1)
+                    }
+                }
+            }
+            LaunchedEffect(activeMatch, matches, textLayout) {
+                val range = matches.getOrNull(activeMatch) ?: return@LaunchedEffect
+                val layout = textLayout ?: return@LaunchedEffect
+                if (range.first >= layout.layoutInput.text.length) return@LaunchedEffect
+                bringMatchIntoView.bringIntoView(layout.getBoundingBox(range.first))
+            }
+            Column(modifier.verticalScroll(scroll).testTag(if (editable) "note-source-editor" else "note-source-reader")
                 .padding(horizontal = 22.dp, vertical = 16.dp)) {
                 BasicTextField(
                     value = localTitle, onValueChange = { localTitle = it; onTitleChanged(it) },
@@ -81,7 +112,11 @@ fun SourceNoteEditor(
                     textStyle = style, cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     modifier = Modifier.fillMaxWidth().testTag("source-editor")
                         .semantics { contentDescription = sourceDescription },
-                ) else SelectionContainer { Text(content, style = style, modifier = Modifier.fillMaxWidth()) }
+                ) else SelectionContainer {
+                    Text(highlighted, style = style, onTextLayout = { textLayout = it },
+                        modifier = Modifier.fillMaxWidth().testTag("source-reader")
+                            .bringIntoViewRequester(bringMatchIntoView))
+                }
             }
         }
     }

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="action_attach">Прикрепить</string>
+    <string name="action_attach_image">Добавить изображение</string>
+    <string name="action_attach_file">Прикрепить файл</string>
+    <string name="msg_upload_staging">Сохраняем файл на телефоне…</string>
+    <string name="msg_upload_queued">Файл сохранён на телефоне и ожидает загрузки</string>
+    <string name="msg_upload_retry">Не удалось загрузить вложение. Файл сохранён на телефоне; загрузка повторится при подключении.</string>
+    <string name="msg_upload_failed">Не удалось сохранить выбранный файл. Выберите его ещё раз.</string>
+    <string name="msg_upload_pending">Вложений в очереди: %1$d</string>
+</resources>

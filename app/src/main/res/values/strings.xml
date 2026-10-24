@@ -15,7 +15,6 @@
     <string name="connecting">"Подключение…"</string>
     <string name="connect">"Подключиться"</string>
     <string name="reset_connection">"Сбросить подключение"</string>
-    <string name="licenses">"Лицензии"</string>
     <string name="connection">"Подключение"</string>
     <string name="back">"Назад"</string>
     <string name="trilium_server">"Сервер Trilium"</string>
@@ -25,7 +24,6 @@
     <string name="disconnect_message">"Синхронизация остановится. Локальные заметки и неотправленные правки сохранятся на телефоне."</string>
     <string name="sign_out">"Выйти"</string>
     <string name="cancel">"Отмена"</string>
-    <string name="license">"Лицензия"</string>
     <string name="sync_error">"Ошибка синхронизации"</string>
     <string name="no_internet">"Нет интернета"</string>
     <string name="updating_notes">"Обновление заметок"</string>
@@ -162,13 +160,7 @@
     <string name="delete_title">"Удалить «%1$s»?"</string>
     <string name="legacy_message">"На телефоне найдена прежняя локальная копия. Это данные сервера %1$s? Перенос разрешит их синхронизацию. Уже загруженная копия этого сервера будет заменена, если в ней нет неотправленных правок."</string>
     <string name="legacy_pending">"Не отправлено изменений: %1$d."</string>
-    <string name="legal_copyright_terms">"Авторские права и условия"</string>
-    <string name="legal_third_party">"Сторонние компоненты"</string>
     <string name="notes">Заметки</string>
-    <string name="legal_editor_notice">CKEditor — происхождение и изменения</string>
-    <string name="legal_editor_components">CKEditor — лицензии компонентов</string>
-    <string name="legal_editor_gpl">CKEditor — GNU GPL</string>
-    <string name="legal_editor_dependencies">CKEditor — уведомления зависимостей</string>
     <string name="language">Язык</string>
     <string name="language_russian">Русский</string>
     <string name="language_english">English</string>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="action_attach">Attach</string>
+    <string name="action_attach_image">Add image</string>
+    <string name="action_attach_file">Attach file</string>
+    <string name="msg_upload_staging">Saving file on this phone…</string>
+    <string name="msg_upload_queued">File saved on this phone and queued for upload</string>
+    <string name="msg_upload_retry">Could not upload the attachment. The file is saved on this phone and will retry when connected.</string>
+    <string name="msg_upload_failed">Could not save the selected file. Select it again.</string>
+    <string name="msg_upload_pending">Queued attachments: %1$d</string>
+</resources>

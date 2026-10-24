@@ -72,6 +72,7 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
     }
 
     fun isDeleted(noteId: String): Boolean = noteId in deletionClosure(store)
+    internal fun isLocalCreate(noteId: String): Boolean = store.pending[noteId]?.kind == "create"
     fun isHidden(noteId: String): Boolean = isDeleted(noteId) || visibility(store).isHidden(noteId)
     fun isHidden(note: NoteMeta): Boolean {
         val snapshot = store
@@ -257,6 +258,42 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
             )
         }
         return requireNotNull(document(store, noteId))
+    }
+
+    /** Merge into the current durable draft under the same lock as normal edits. */
+    suspend fun appendAttachmentReference(upload: PendingAttachmentUpload, attachment: AttachmentMeta): NoteDocument {
+        require(attachment.ownerId == upload.noteId && upload.contentUploaded)
+        change { next ->
+            val noteId = upload.noteId
+            require(noteId !in deletionClosure(next)) { "Note is deleted" }
+            val stored = next.notes[noteId] ?: throw IOException("Open the note first")
+            require(stored.meta.isEditable)
+            val old = next.pending[noteId]
+            if (old?.conflict == true) throw AttachmentInsertionDeferred()
+            val body = old?.html ?: stored.html ?: throw IOException("Load the note content first")
+            // A crash can happen after this write and before the upload entry is removed.
+            // Both native and legacy Trilium URLs include the attachment ID as a segment.
+            val marker = Regex("(?:api/attachments/(?:[A-Za-z0-9_]{4,32}/)?|etapi/attachments/)${Regex.escape(attachment.id)}(?:/|[\\\"'<>\\s)])")
+            if (marker.containsMatchIn(body)) return@change
+            val markdown = stored.meta.mime.substringBefore(';').trim().lowercase().let {
+                it.startsWith("text/") && it.endsWith("markdown")
+            }
+            next.counter++
+            next.pending[noteId] = Pending(
+                kind = old?.kind ?: "update", noteId = noteId,
+                branchId = old?.branchId,
+                parentId = old?.parentId ?: stored.meta.parentNoteIds.firstOrNull(),
+                title = old?.title ?: stored.meta.title,
+                html = body + attachmentReference(upload, attachment, markdown),
+                baseTitle = if (old?.kind == "create") old.baseTitle else old?.baseTitle ?: stored.meta.title,
+                baseHash = if (old?.kind == "create") old.baseHash else old?.baseHash ?: digest(requireNotNull(stored.html)),
+                revision = next.counter,
+                noteType = old?.noteType ?: stored.meta.type,
+                noteMime = old?.noteMime ?: stored.meta.mime,
+                remoteMissing = old?.remoteMissing ?: false,
+            )
+        }
+        return requireNotNull(document(store, upload.noteId))
     }
 
     /** Stages a note with stable client IDs, so a lost create response cannot duplicate it. */

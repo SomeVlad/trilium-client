@@ -75,6 +75,7 @@ fun RichNoteEditor(
     resourceLoader: (String) -> EditorResource? = { null },
     serverUrl: String = "",
     controller: RichNoteEditorController? = null,
+    searchState: NoteSearchState? = null,
 ) {
     val context = LocalContext.current
     // Observe configuration changes as well as the context used to create this WebView.
@@ -91,6 +92,7 @@ fun RichNoteEditor(
         val latestOpenLink = rememberUpdatedState(onOpenLink)
         val latestResourceLoader = rememberUpdatedState(resourceLoader)
         val latestServerUrl = rememberUpdatedState(serverUrl)
+        val latestSearch = rememberUpdatedState(searchState)
         val activeController = controller ?: rememberRichNoteEditorController()
         val delivery = remember { DeliveryState(initialHtml, title) }
         fun deliverHtml(value: String, revision: Long) {
@@ -154,6 +156,7 @@ fun RichNoteEditor(
                                             if (!presentation.disposed) {
                                                 presentation.visualReady = true
                                                 alpha = 1f
+                                                latestSearch.value?.query?.takeIf { it.isNotEmpty() }?.let { findAllAsync(it) }
                                                 if (JSONObject(latestTheme.value).optBoolean("editing"))
                                                     focusEditorAndShowKeyboard(latestTheme.value) { !presentation.disposed && presentation.visualReady && JSONObject(latestTheme.value).optBoolean("editing") }
                                             }
@@ -222,6 +225,25 @@ fun RichNoteEditor(
             factory = { webView },
             modifier = modifier.testTag(if (isEditing && !readOnly) "note-editor" else "note-reader"),
         )
+        DisposableEffect(webView, searchState) {
+            val navigate: (Boolean) -> Unit = { webView.findNext(it) }
+            searchState?.navigation = navigate
+            webView.setFindListener { activeMatchOrdinal, numberOfMatches, isDoneCounting ->
+                if (isDoneCounting && latestSearch.value === searchState && searchState?.query?.isNotEmpty() == true) {
+                    searchState.updateResults(numberOfMatches, activeMatchOrdinal)
+                }
+            }
+            onDispose {
+                if (searchState?.navigation === navigate) searchState.navigation = null
+                webView.setFindListener(null)
+                webView.clearMatches()
+            }
+        }
+        LaunchedEffect(webView, searchState, searchState?.query) {
+            webView.clearMatches()
+            searchState?.updateResults(0)
+            if (presentation.visualReady) searchState?.query?.takeIf { it.isNotEmpty() }?.let { webView.findAllAsync(it) }
+        }
         LaunchedEffect(webView, theme) {
             // Keep the window's hardware renderer: a forced software layer distorts
             // CKEditor's placeholder pseudo-element even when its CSS metrics are correct.

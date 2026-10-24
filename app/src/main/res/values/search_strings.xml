@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="note_search">Поиск в заметке</string>
+    <string name="note_search_hint">Найти в заметке</string>
+    <string name="note_search_count">%1$d/%2$d</string>
+    <string name="note_search_previous">Предыдущее совпадение</string>
+    <string name="note_search_next">Следующее совпадение</string>
+    <string name="note_search_close">Закрыть поиск</string>
+</resources>

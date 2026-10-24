@@ -1,6 +1,7 @@
 package ru.vlad.triliumnotes
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -11,6 +12,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.first
+import ru.vlad.triliumnotes.data.AttachmentMeta
+import ru.vlad.triliumnotes.data.PendingAttachmentUpload
+import ru.vlad.triliumnotes.data.AttachmentInsertionDeferred
+import ru.vlad.triliumnotes.data.NoteRevision
+import ru.vlad.triliumnotes.data.RevisionDocument
+import ru.vlad.triliumnotes.data.NoteHistory
+import ru.vlad.triliumnotes.data.ApiException
+import ru.vlad.triliumnotes.ui.NoteHistoryState
 import ru.vlad.triliumnotes.data.HiddenNoteException
 import ru.vlad.triliumnotes.data.NoteDocument
 import ru.vlad.triliumnotes.data.NoteMeta
@@ -46,6 +59,9 @@ data class NotesScreenState(
     val fromCache: Boolean = false,
     val networkAvailable: Boolean = true,
     val deletingNoteId: String? = null,
+    val editorEpoch: Long = 0,
+    val operationBusy: Boolean = false,
+    val uploadStaging: Boolean = false,
 )
 
 class NotesViewModel(application: Application,
@@ -60,6 +76,17 @@ class NotesViewModel(application: Application,
     private val mutable = MutableStateFlow(NotesScreenState(networkAvailable = networkAvailable))
     val state = mutable.asStateFlow()
     val syncState = repository.syncState
+    val uploadState = services.uploads.state
+    private val history = NoteHistory(services.api)
+    private val mutableHistory = MutableStateFlow<NoteHistoryState?>(null)
+    val historyState = mutableHistory.asStateFlow()
+    var historyNote: NoteMeta? = null
+        private set
+    private var historyJob: Job? = null
+    private var editingNoteId: String? = null
+    private val insertionHandler: suspend (PendingAttachmentUpload, AttachmentMeta) -> Unit = { upload, attachment ->
+        applyUploadedAttachment(upload, attachment)
+    }
     fun loadResource(path: String): ResourceContent? = resources.load(path)
     suspend fun loadAttachment(note: NoteMeta): CachedAttachment = resources.loadNote(note)
     suspend fun loadLinkedAttachment(path: String): CachedAttachment = resources.loadLinkedAttachment(path)
@@ -76,6 +103,7 @@ class NotesViewModel(application: Application,
     private val writes = Channel<Draft>(Channel.CONFLATED)
 
     init {
+        services.attachmentInsertionHandler = insertionHandler
         viewModelScope.launch {
             for (draft in writes) {
                 try {
@@ -117,7 +145,7 @@ class NotesViewModel(application: Application,
     }
 
     fun refreshFolder() {
-        if (mutable.value.deletingNoteId != null) return
+        if (mutable.value.deletingNoteId != null || mutable.value.operationBusy) return
         val folder = mutable.value.folders.last()
         folderJob?.cancel()
         val cached = repository.cachedChildren(folder.id)
@@ -200,7 +228,7 @@ class NotesViewModel(application: Application,
     }
 
     fun back() {
-        if (mutable.value.deletingNoteId != null) return
+        if (mutable.value.deletingNoteId != null || mutable.value.operationBusy) return
         if (mutable.value.openingNoteId != null) {
             navigationVersion++
             openJob?.cancel()
@@ -228,7 +256,7 @@ class NotesViewModel(application: Application,
     }
 
     fun search(query: String) {
-        if (mutable.value.deletingNoteId != null) return
+        if (mutable.value.deletingNoteId != null || mutable.value.operationBusy) return
         searchJob?.cancel()
         // Refreshing the same result set must not unmount its rows or clamp the
         // saved scroll position while returning from a note or reconnecting.
@@ -252,7 +280,7 @@ class NotesViewModel(application: Application,
     fun open(note: NoteMeta) = open(note, preserveHistory = false)
 
     private fun open(note: NoteMeta, preserveHistory: Boolean, forceRefresh: Boolean = false) {
-        if (mutable.value.localWritePending || mutable.value.deletingNoteId != null || repository.isHidden(note)) return
+        if (mutable.value.localWritePending || mutable.value.operationBusy || mutable.value.deletingNoteId != null || repository.isHidden(note)) return
         repository.pinDocument(note.id)
         if (!preserveHistory) noteHistory.clear()
         val request = ++navigationVersion
@@ -418,7 +446,7 @@ class NotesViewModel(application: Application,
     }
 
     private fun edit(title: String? = null, html: String? = null) {
-        if (mutable.value.deletingNoteId != null) return
+        if (mutable.value.deletingNoteId != null || mutable.value.operationBusy) return
         val before = mutable.value.document ?: return
         if (!before.note.isEditable) return
         val changed = before.copy(note = before.note.copy(title = title ?: before.note.title), html = html ?: before.html, pending = true)
@@ -439,9 +467,11 @@ class NotesViewModel(application: Application,
 
     private suspend fun performSync() {
         if (syncState.value.isSyncing) return
-        if (syncState.value.pendingCount <= syncState.value.conflicts.size) return
+        if (syncState.value.pendingCount <= syncState.value.conflicts.size && uploadState.value.pendingCount == 0) return
         val pendingBefore = syncState.value.pendingCount
         try {
+            repository.syncPending()
+            services.uploads.syncPending()
             val result = repository.syncPending()
             val current = mutable.value.document
             if (current != null && !mutable.value.localWritePending) {
@@ -476,6 +506,7 @@ class NotesViewModel(application: Application,
     fun connectionAvailable() {
         networkAvailable = true
         mutable.update { it.copy(networkAvailable = true) }
+        mutableHistory.update { it?.copy(allowRestore = true) }
         NotesSyncScheduler.ensureOfflineCopy(getApplication(), offlineState.value)
         schedulePendingChanges()
         syncNow()
@@ -485,9 +516,10 @@ class NotesViewModel(application: Application,
     fun connectionUnavailable() {
         networkAvailable = false
         mutable.update { it.copy(networkAvailable = false, fromCache = if (it.document == null) true else it.fromCache) }
+        mutableHistory.update { it?.copy(allowRestore = false) }
     }
     fun refreshAll() {
-        if (mutable.value.deletingNoteId != null) return
+        if (mutable.value.deletingNoteId != null || mutable.value.operationBusy) return
         NotesSyncScheduler.scheduleOneTime(getApplication())
         refreshCurrentView()
         syncNow()
@@ -495,8 +527,178 @@ class NotesViewModel(application: Application,
     fun clearError() { mutable.update { it.copy(error = null) } }
 
     private fun schedulePendingChanges() {
-        if (syncState.value.pendingCount > syncState.value.conflicts.size)
+        if (syncState.value.pendingCount > syncState.value.conflicts.size || uploadState.value.pendingCount > 0)
             NotesSyncScheduler.schedulePending(getApplication())
+    }
+
+    fun setEditing(noteId: String, editing: Boolean) {
+        if (editing) editingNoteId = noteId
+        else if (editingNoteId == noteId) {
+            editingNoteId = null
+            syncNow()
+        }
+    }
+
+    fun stageAttachment(noteId: String, uri: Uri, inlineImage: Boolean) {
+        if (mutable.value.uploadStaging || mutable.value.operationBusy || mutable.value.deletingNoteId != null) return
+        mutable.update { it.copy(uploadStaging = true, error = null) }
+        viewModelScope.launch {
+            try {
+                awaitLocalWrites()
+                services.uploads.stage(uri, noteId, inlineImage)
+                NotesSyncScheduler.schedulePending(getApplication())
+                syncNow()
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutable.update { it.copy(error = text(R.string.msg_upload_failed)) }
+            } finally { mutable.update { it.copy(uploadStaging = false) } }
+        }
+    }
+
+    private suspend fun applyUploadedAttachment(upload: PendingAttachmentUpload, attachment: AttachmentMeta) =
+        withContext(Dispatchers.Main.immediate) {
+            if (editingNoteId != null || mutable.value.localWritePending || mutable.value.operationBusy ||
+                mutable.value.openingNoteId != null || mutable.value.deletingNoteId != null)
+                throw AttachmentInsertionDeferred()
+            mutable.update { it.copy(operationBusy = true) }
+            try {
+                val document = repository.appendAttachmentReference(upload, attachment)
+                if (mutable.value.document?.note?.id == upload.noteId) mutable.update {
+                    it.copy(document = document, editorEpoch = it.editorEpoch + 1,
+                        newNoteId = null, newNoteTitleUntouched = false, error = null)
+                }
+                NotesSyncScheduler.schedulePending(getApplication())
+            } finally { mutable.update { it.copy(operationBusy = false) } }
+        }
+
+    private suspend fun awaitLocalWrites() {
+        val current = withTimeout(10_000) { state.first { !it.localWritePending || it.localSaveFailed } }
+        check(!current.localSaveFailed && !current.localWritePending) { "Local draft is not saved" }
+    }
+
+    fun openHistory(noteId: String) {
+        val note = repository.cachedMeta(noteId) ?: return
+        if (mutableHistory.value?.working == true) return
+        historyJob?.cancel()
+        historyNote = note
+        mutableHistory.value = NoteHistoryState(allowRestore = mutable.value.networkAvailable)
+        historyJob = viewModelScope.launch {
+            try {
+                awaitLocalWrites()
+                val revisions = history.list(noteId)
+                mutableHistory.update { it?.copy(revisions = revisions, loading = false, error = null) }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutableHistory.update { it?.copy(loading = false, error = text(
+                    if (error is ApiException && error.status in setOf(404, 405, 501)) R.string.history_unavailable
+                    else R.string.history_load_error)) }
+            }
+        }
+    }
+
+    fun selectRevision(revision: NoteRevision) {
+        val note = historyNote ?: return
+        if (revision.noteId != note.id || mutableHistory.value?.working == true) return
+        historyJob?.cancel()
+        mutableHistory.update { it?.copy(selected = revision, preview = null, previewLoading = true, error = null) }
+        historyJob = viewModelScope.launch {
+            try {
+                val preview = history.preview(note.id, revision.id)
+                mutableHistory.update { it?.copy(preview = preview, previewLoading = false) }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutableHistory.update { it?.copy(previewLoading = false, error = text(R.string.history_preview_unavailable)) }
+            }
+        }
+    }
+
+    fun retryHistory() {
+        val selected = mutableHistory.value?.selected
+        if (selected != null) selectRevision(selected) else historyNote?.let { openHistory(it.id) }
+    }
+
+    fun historyBack() {
+        if (mutableHistory.value?.working == true) return
+        historyJob?.cancel()
+        if (mutableHistory.value?.selected != null)
+            mutableHistory.update { it?.copy(selected = null, preview = null, previewLoading = false, error = null) }
+        else closeHistory()
+    }
+
+    fun closeHistory() {
+        if (mutableHistory.value?.working == true) return
+        historyJob?.cancel()
+        mutableHistory.value = null
+        historyNote = null
+    }
+
+    fun saveCurrentVersion() = writeHistory(null)
+    fun restoreRevision(revision: RevisionDocument) = writeHistory(revision)
+
+    private fun writeHistory(restoring: RevisionDocument?) {
+        val note = historyNote ?: return
+        if (mutableHistory.value?.working == true || mutable.value.operationBusy) return
+        if (mutable.value.uploadStaging) {
+            mutableHistory.update { it?.copy(error = text(R.string.history_sync_first)) }
+            return
+        }
+        if (restoring != null && (!restoring.revision.canRestoreTo(note) ||
+                mutableHistory.value?.preview != restoring)) return
+        historyJob?.cancel()
+        mutableHistory.update { it?.copy(working = true, error = null) }
+        mutable.update { it.copy(operationBusy = true) }
+        historyJob = viewModelScope.launch {
+            var staged = false
+            try {
+                awaitLocalWrites()
+                // Current edits must be on the server BEFORE the protective snapshot.
+                // A failure or conflict aborts restoration without replacing local content.
+                if (services.uploads.hasPending(note.id)) {
+                    mutableHistory.update { it?.copy(error = text(R.string.history_sync_first)) }
+                    return@launch
+                }
+                repository.syncPending()
+                val current = repository.cachedNote(note.id) ?: error("Note is unavailable")
+                if (current.conflict || current.remoteMissing) {
+                    mutableHistory.update { it?.copy(error = text(R.string.history_conflict_first)) }
+                    return@launch
+                }
+                if (current.pending) {
+                    mutableHistory.update { it?.copy(error = text(R.string.history_sync_first)) }
+                    return@launch
+                }
+                if (restoring != null && !restoring.revision.canRestoreTo(services.api.getNote(note.id)))
+                    error("Note type or protection changed")
+                history.saveCurrentRevision(note.id,
+                    if (restoring != null) text(R.string.history_before_restore) else "")
+                if (restoring != null) {
+                    val restored = repository.saveDraft(note.id, restoring.revision.title, restoring.content)
+                    staged = true
+                    if (mutable.value.document?.note?.id == note.id) mutable.update {
+                        it.copy(document = restored, editorEpoch = it.editorEpoch + 1,
+                            newNoteId = null, newNoteTitleUntouched = false, error = null)
+                    }
+                    NotesSyncScheduler.schedulePending(getApplication())
+                    repository.syncPending()
+                    val persisted = repository.cachedNote(note.id)
+                    if (persisted != null && mutable.value.document?.note?.id == note.id)
+                        mutable.update { it.copy(document = persisted) }
+                    mutableHistory.value = null
+                    historyNote = null
+                } else {
+                    val revisions = history.list(note.id)
+                    mutableHistory.update { it?.copy(revisions = revisions, selected = null, preview = null, loading = false) }
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutableHistory.update { it?.copy(error = text(if (restoring == null)
+                    R.string.history_save_error else R.string.history_restore_error)) }
+                if (staged) NotesSyncScheduler.schedulePending(getApplication())
+            } finally {
+                mutableHistory.update { it?.copy(working = false) }
+                mutable.update { it.copy(operationBusy = false) }
+            }
+        }
     }
 
     private fun folderHasContent(id: String, note: NoteMeta, body: String): Boolean {
@@ -525,6 +727,7 @@ class NotesViewModel(application: Application,
     }
 
     override fun onCleared() {
+        if (services.attachmentInsertionHandler === insertionHandler) services.attachmentInsertionHandler = null
         repository.pinDocument(null)
         super.onCleared()
     }

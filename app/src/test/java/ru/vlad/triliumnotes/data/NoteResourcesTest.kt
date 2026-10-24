@@ -45,6 +45,43 @@ class NoteResourcesTest {
             resolveResourceTarget("/api/images/noteAAAA/picture.png", "https://notes.example"))
     }
 
+    @Test fun uploadedAttachmentSurvivesOutboxRemovalAndRestartWithoutAnyDownload() = runBlocking {
+        var networkCalls = 0
+        val disconnected = OkHttpClient.Builder().addInterceptor {
+            networkCalls++
+            throw java.io.IOException("No transport after upload")
+        }.build()
+        val offlineApi = TriliumApi("https://notes.example", "synthetic-token", disconnected)
+        val attachment = AttachmentMeta("attachAAAA", "ownerAAAA", "image", "image/png", "Phone image.png", 0, "uploadedBlob")
+        val source = File(directory, "outbox-image").apply { writeBytes(byteArrayOf(0, 13, 10, -1)) }
+        val resources = NoteResources(context, offlineApi)
+        resources.cacheUploadedAttachment(attachment, source)
+        source.delete()
+        val restarted = NoteResources(context, offlineApi)
+        val path = "api/attachments/ownerAAAA/attachAAAA/Phone%20image.png"
+        assertArrayEquals(byteArrayOf(0, 13, 10, -1), restarted.load(path)!!.bytes)
+        val linked = restarted.loadLinkedAttachment(path)
+        assertArrayEquals(byteArrayOf(0, 13, 10, -1), linked.file.readBytes())
+        assertEquals("image/png", linked.mimeType)
+        // Editing the owner does not change the uploaded attachment's content hash.
+        val owner = NoteMeta("ownerAAAA", "Owner", "text", "text/html", false, "newOwnerBlob", "later", emptyList())
+        restarted.prefetchAttachment(attachment, owner)
+        assertEquals(0, networkCalls)
+        assertEquals("uploadedBlob", File(directory, "note-resources/attachment_attachAAAA.version").readText())
+        assertEquals("image/png", File(directory, "note-resources/attachment_attachAAAA.mime").readText())
+    }
+
+    @Test fun uploadCacheStreamsLargeFilesForTheNativeViewer() = runBlocking {
+        val source = File(directory, "outbox-video")
+        val size = MAX_INLINE_RESOURCE_BYTES.toLong() + 8192L
+        java.io.RandomAccessFile(source, "rw").use { it.setLength(size) }
+        val disconnected = OkHttpClient.Builder().addInterceptor { throw java.io.IOException("No download allowed") }.build()
+        val resources = NoteResources(context, TriliumApi("https://notes.example", "synthetic-token", disconnected))
+        resources.cacheUploadedAttachment(AttachmentMeta("attachAAAA", "ownerAAAA", "file", "video/mp4", "phone.mp4", 0, "videoBlob"), source)
+        source.delete()
+        assertEquals(size, resources.loadLinkedAttachment("api/attachments/ownerAAAA/attachAAAA/phone.mp4").file.length())
+    }
+
     @Test fun standardTriliumImageAndDownloadRoutesUseAttachmentIdBeforeAction() {
         listOf("image", "download", "content").forEach { action ->
             assertEquals(ResourceTarget("attachAAAA", true),

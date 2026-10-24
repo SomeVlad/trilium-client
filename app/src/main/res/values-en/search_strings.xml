@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="note_search">Find in note</string>
+    <string name="note_search_hint">Find in note</string>
+    <string name="note_search_count">%1$d/%2$d</string>
+    <string name="note_search_previous">Previous match</string>
+    <string name="note_search_next">Next match</string>
+    <string name="note_search_close">Close search</string>
+</resources>

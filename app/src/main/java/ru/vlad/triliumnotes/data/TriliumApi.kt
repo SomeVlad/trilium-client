@@ -12,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import java.io.IOException
@@ -193,6 +194,39 @@ class TriliumApi(
         }
     }
 
+    internal suspend fun historyRequest(method: String, segments: List<String>, body: String? = null,
+        allowsHtmlBody: Boolean = false): String =
+        send(method, endpoint(*segments.toTypedArray()), body, allowsHtmlBody = allowsHtmlBody,
+            expectedCode = if (method == "POST" && segments.lastOrNull() == "revision") 204 else null)
+
+    suspend fun createAttachment(ownerId: String, role: String, mime: String, title: String,
+        position: Int): AttachmentMeta {
+        val item = JSONObject(send("POST", endpoint("attachments"), JSONObject()
+            .put("ownerId", ownerId).put("role", role).put("mime", mime)
+            .put("title", title).put("position", position).toString()))
+        return AttachmentMeta(item.getString("attachmentId"), item.getString("ownerId"),
+            item.optString("role"), item.optString("mime"), item.optString("title"), item.optInt("position"),
+            item.optString("blobId").takeIf { it.isNotBlank() && it != "null" })
+    }
+
+    suspend fun patchAttachmentTitle(attachmentId: String, title: String) {
+        send("PATCH", endpoint("attachments", attachmentId), JSONObject().put("title", title).toString())
+    }
+
+    /** Stream from the durable outbox copy; never hold a selected file in memory. */
+    suspend fun putAttachmentContent(attachmentId: String, file: File) = withContext(Dispatchers.IO) {
+        checkActive()
+        val request = Request.Builder().url(endpoint("attachments", attachmentId, "content"))
+            .header("Authorization", authorization)
+            .put(file.asRequestBody("application/octet-stream".toMediaType())).build()
+        binaryClient.newBuilder().callTimeout(5, TimeUnit.MINUTES).build().newCall(request).execute().use { response ->
+            checkActive()
+            if (isKnownCrowdSecCaptchaPage(response.peekBody(65_536).string()))
+                throw UnexpectedHtmlResponseException(response.code)
+            if (response.code != 204) throw ApiException(response.code)
+        }
+    }
+
     suspend fun getChildren(parentId: String): List<TreeItem> = getChildrenResult(parentId).items
 
     suspend fun getChildrenResult(parentId: String): ChildrenResult {
@@ -330,6 +364,7 @@ class TriliumApi(
         content: String? = null,
         contentType: String = "application/json; charset=utf-8",
         allowsHtmlBody: Boolean = false,
+        expectedCode: Int? = null,
     ): String = withContext(Dispatchers.IO) {
         checkActive()
         val request = Request.Builder()
@@ -351,7 +386,8 @@ class TriliumApi(
                 (!allowsHtmlBody && isHtmlInsteadOfJson(response.header("Content-Type"), body))) {
                 throw UnexpectedHtmlResponseException(response.code)
             }
-            if (!response.isSuccessful) throw ApiException(response.code)
+            if (!response.isSuccessful || (expectedCode != null && response.code != expectedCode))
+                throw ApiException(response.code)
             body
         }
     }

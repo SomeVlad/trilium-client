@@ -102,6 +102,43 @@ class NoteResources(
         read(ResourceTarget(attachment.id, true), version, allowStaleOnError = false) { Unit }
     }
 
+    /** Preserve the confirmed upload locally without downloading our own bytes again. */
+    suspend fun cacheUploadedAttachment(attachment: AttachmentMeta, sourceFile: File) = withContext(Dispatchers.IO) {
+        require(attachment.id.matches(Regex("[A-Za-z0-9_]{4,32}")))
+        val version = attachment.blobId?.takeIf { it.isNotBlank() }
+            ?: throw IOException("Uploaded attachment version is missing")
+        val target = ResourceTarget(attachment.id, true)
+        resourceLocks.getOrPut(target.cacheKey) { Mutex() }.withLock {
+            if (!sourceFile.isFile) throw IOException("Uploaded attachment content is missing")
+            val data = File(directory, "${target.cacheKey}.data")
+            val mimeFile = File(directory, "${target.cacheKey}.mime")
+            val versionFile = File(directory, "${target.cacheKey}.version")
+            if (data.isFile && data.length() == sourceFile.length() && mimeFile.isFile && versionFile.isFile &&
+                mimeFile.readText() == attachment.mime && versionFile.readText() == version) return@withLock
+            require(sourceFile.canonicalFile != data.canonicalFile)
+            val atomic = AtomicFile(data)
+            val output = atomic.startWrite()
+            try {
+                sourceFile.inputStream().use { input ->
+                    val chunk = ByteArray(8192)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val count = input.read(chunk)
+                        if (count < 0) break
+                        output.write(chunk, 0, count)
+                    }
+                }
+                currentCoroutineContext().ensureActive()
+                atomic.finishWrite(output)
+            } catch (error: Throwable) {
+                atomic.failWrite(output)
+                throw error
+            }
+            write(mimeFile, attachment.mime.toByteArray(Charsets.UTF_8))
+            write(versionFile, version.toByteArray(Charsets.UTF_8))
+        }
+    }
+
     /** Use the same persistent files as the WebView and native viewers. */
     suspend fun prefetchInline(body: String, validatedAttachmentIds: Set<String> = emptySet(), markdown: Boolean = false): Int = withContext(Dispatchers.IO) {
         val html = if (markdown) org.commonmark.renderer.html.HtmlRenderer.builder().build()
