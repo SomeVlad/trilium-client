@@ -54,7 +54,7 @@ To sign your own release, copy `signing.properties.example` to `signing.properti
 
 ## Validation and contributing
 
-See the [validation record](docs/acceptance.md) for the tested scope and known gaps, and [CONTRIBUTING.md](CONTRIBUTING.md) for local checks. [Android CI](.github/workflows/build.yml) builds and tests with dummy connection settings.
+See the [validation record](docs/acceptance.md) for the tested scope and known gaps, and [CONTRIBUTING.md](CONTRIBUTING.md) for local checks. A [ready-to-enable CI workflow](ci/build.yml) builds and tests with dummy connection settings. GitHub Actions is not enabled yet because the current publishing credential lacks the `workflow` scope; see [CI setup](ci/README.md).
 
 ## License
 

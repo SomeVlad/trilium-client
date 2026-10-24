@@ -25,4 +25,8 @@ Folder and search scroll restoration passed using Android's system Back key comm
 - Deletion has no client-side undo. Unsupported special note types are described in the [README](../README.md).
 - Source-release configuration changes require their own build checks; the results above describe the app acceptance run, not a new run of that suite after every documentation change.
 
-The [synthetic screenshots](screenshots/) illustrate the UI. For reproducible local commands, see [CONTRIBUTING.md](../CONTRIBUTING.md); [Android CI](../.github/workflows/build.yml) uses the disconnected demo configuration.
+The [synthetic screenshots](screenshots/) illustrate the UI. For reproducible local commands, see [CONTRIBUTING.md](../CONTRIBUTING.md); the [prepared CI workflow](../ci/build.yml) uses the disconnected demo configuration and is not yet active.
+
+## Source-preview preparation
+
+A clean checkout with no private properties, signing properties, or release key passed all 100 JVM tests, `assembleDebug`, and release lint (0 errors, 21 warnings). The resulting APK contains only the `.invalid` endpoint and dummy token. A separate `-PdemoBuild=true` run also passed with private local configuration present, confirming that demo mode ignores it. This run did not repeat the Android device scenarios above because application behavior was unchanged.
