@@ -22,6 +22,60 @@
         doc.body.append(template.content); return doc;
     };
 
+    function preserveHtmlLineBreaks(doc) {
+        // Some HTML notes contain literal line separators within a paragraph.
+        // Make those separators explicit before CKEditor's whitespace normalization.
+        // Structural HTML indentation and preformatted content keep their own rules.
+        const blocks = 'address,article,aside,blockquote,caption,center,dd,details,dialog,dir,div,dl,dt,fieldset,figcaption,figure,' +
+            'footer,form,h1,h2,h3,h4,h5,h6,header,hgroup,hr,legend,li,main,menu,nav,ol,p,pre,section,summary,table,tbody,td,tfoot,th,thead,tr,ul';
+        const candidates = [doc.body, ...doc.body.querySelectorAll('p,h1,h2,h3,h4,h5,h6,div,li,td,th,blockquote')];
+        for (const block of candidates) {
+            if (block.querySelector(blocks)) continue;
+            const tokens = [], replacements = new Map();
+            const walker = doc.createTreeWalker(block, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+            let node;
+            while ((node = walker.nextNode())) {
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    if (node.localName === 'br') tokens.push({kind:'br'});
+                    continue;
+                }
+                let controlledWhitespace = false;
+                for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                    if (parent.matches('pre,textarea') || parent.style.whiteSpace) { controlledWhitespace = true; break; }
+                }
+                if (controlledWhitespace || !node.data.includes('\n') ||
+                    (!node.data.trim() && /[\t ]/.test(node.data))) {
+                    if (node.data.trim()) tokens.push({kind:'text'});
+                    continue;
+                }
+                const parts = node.data.split('\n');
+                replacements.set(node, parts.map(() => false));
+                parts.forEach((part, index) => {
+                    if (part.trim()) tokens.push({kind:'text'});
+                    if (index < parts.length - 1) tokens.push({kind:'lf', node, index});
+                });
+            }
+            const first = tokens.findIndex(item => item.kind !== 'lf');
+            let last = tokens.length - 1;
+            while (last >= 0 && tokens[last].kind === 'lf') last--;
+            tokens.forEach((item, index) => {
+                if (item.kind === 'lf' && index > first && index < last &&
+                    tokens[index - 1]?.kind !== 'br' && tokens[index + 1]?.kind !== 'br') {
+                    replacements.get(item.node)[item.index] = true;
+                }
+            });
+            replacements.forEach((breaks, text) => {
+                if (!breaks.some(Boolean)) return;
+                const fragment = doc.createDocumentFragment();
+                text.data.split('\n').forEach((part, index) => {
+                    if (index) fragment.append(breaks[index - 1] ? doc.createElement('br') : doc.createTextNode('\n'));
+                    fragment.append(doc.createTextNode(part));
+                });
+                text.replaceWith(fragment);
+            });
+        }
+    }
+
     // Preserve executable/embedded objects as inert tokens. They are restored only in serialized data.
     function forEditing(html, rewriteResources = true, readOnlyPreview = false) {
         const doc = parsed(html);
@@ -44,6 +98,7 @@
             } else replacement.textContent = 'Встроенный HTML · ' + node.tagName.toLowerCase();
             node.replaceWith(replacement);
         });
+        if (!isMarkdown) preserveHtmlLineBreaks(doc);
         doc.body.querySelectorAll('*').forEach(node => {
             // Disable reader controls in the detached document, before autofocus or editable nodes go live.
             if (readOnlyPreview) {

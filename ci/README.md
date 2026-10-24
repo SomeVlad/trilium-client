@@ -12,8 +12,8 @@ tag must match `versionName` in `app/build.gradle.kts` and point to a commit in
 appropriate, commit and push `main`, then push the matching tag:
 
 ```sh
-git tag v0.4.1
-git push origin v0.4.1
+git tag v0.4.2
+git push origin v0.4.2
 ```
 
 Configure these repository Actions secrets using the existing PKCS12 signing
@@ -53,6 +53,6 @@ Local workflow checks (no signing secret needed):
 
 ```sh
 actionlint .github/workflows/*.yml
-python3 scripts/verify-release.py --tag v0.4.1
+python3 scripts/verify-release.py --tag v0.4.2
 python3 -m unittest discover -s ci -p 'test_*.py'
 ```

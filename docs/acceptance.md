@@ -1,6 +1,16 @@
 # Validation record
 
-This record includes validation of **0.4.1** publication changes, **0.4.0** runtime authentication and folders, and the earlier **0.3.5** baseline. It is not a claim that every Android device or Trilium version is supported. Public screenshots and the scenarios below use synthetic notes and attachments.
+This record includes validation of **0.4.2** HTML line breaks, **0.4.1** publication changes, **0.4.0** runtime authentication and folders, and the earlier **0.3.5** baseline. It is not a claim that every Android device or Trilium version is supported. Public screenshots and committed test data are synthetic; optional private fixtures are injected locally and never bundled.
+
+## Version 0.4.2
+
+- The new Android regression reproduced the original defect before the fix: two newline-separated HTML tokens had a vertical separation of 0 px instead of one 28.05 px line.
+- 17 unique Android editor checks passed on an API 36 emulator: seven new line-break cases plus the existing rich editor and lazy reader suites. They cover line geometry, empty lines, inline code and links, unchanged snapshots and zero callbacks on opening, a real edit followed by reopening, preformatted code, existing `<br>` tags, explicit whitespace styles, structural HTML indentation and Markdown.
+- Two privately supplied HTML notes passed the same reader/edit/reopen line-geometry checks. The independent reviewer inspected their local screenshots. No private content, identifiers or screenshots were committed, and no server writes were needed for these checks.
+- A System UI ANR initially obscured screenshots and blocked two keyboard-focus checks. After dismissing that emulator dialog, the two checks and private screenshot scenario passed. Screenshot capture now requires a visible, focused WebView before capture; an obscured window fails the test.
+- Debug/instrumentation builds and release lint passed (0 errors, 21 warnings). The independent code review found no remaining blocker in the change.
+
+The compatibility conversion applies to literal LF inside leaf HTML text blocks and bare text bodies. Opening preserves the original source bytes; a real edit can serialize those line boundaries as explicit `<br>` elements. It does not reinterpret every HTML whitespace pattern: mixed bare text around nested blocks and explicit whitespace styles retain their previous handling.
 
 ## Version 0.4.1
 

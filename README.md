@@ -2,7 +2,7 @@
 
 An independent Android client for [Trilium Notes](https://github.com/TriliumNext/Trilium), using its ETAPI. Native Jetpack Compose navigation surrounds a bundled WebView editor for HTML and Markdown. The app connects to your existing Trilium server; it does not run a server on the phone.
 
-Version **0.4.1** includes on-device connection setup and signed release automation. The same APK can connect to your own server; no server address, password or token is compiled into it.
+Version **0.4.2** preserves literal line breaks in imported HTML paragraphs when reading and editing. It includes on-device connection setup and signed release automation. The same APK can connect to your own server; no server address, password or token is compiled into it.
 
 ## Features
 
