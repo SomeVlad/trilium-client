@@ -75,12 +75,12 @@ class MainActivity : ComponentActivity() {
             NotesTheme {
                 val state by connection.state.collectAsStateWithLifecycle()
                 val services = state.services
-                var about by rememberSaveable { mutableStateOf(false) }
+                var licensesVisible by rememberSaveable { mutableStateOf(false) }
                 when {
                     state.restoring -> Surface { Box(Modifier.fillMaxSize()) }
                     services == null -> ConnectionScreen(state.busy, state.error, state.storageFailed,
                         onResetStorage = connection::disconnect, onConnect = connection::connect,
-                        onAbout = { about = true }, onLanguageSelected = ::selectLanguage)
+                        onLicenses = { licensesVisible = true }, onLanguageSelected = ::selectLanguage)
                     else -> key(services) {
                         val notes = remember { connection.notesModel(services) }
                         var settings by rememberSaveable { mutableStateOf(false) }
@@ -92,11 +92,11 @@ class MainActivity : ComponentActivity() {
                         }
                         if (settings) ConnectionSettingsScreen(services.serverUrl, sync.pendingCount,
                             state.busy, state.error, onBack = { settings = false }, onDisconnect = connection::disconnect,
-                            onAbout = { about = true }, onLanguageSelected = ::selectLanguage)
+                            onLicenses = { licensesVisible = true }, onLanguageSelected = ::selectLanguage)
                         else NotesApp(notes, onConnectionSettings = { settings = true })
                     }
                 }
-                if (about) Dialog(onDismissRequest = { about = false },
+                if (licensesVisible) Dialog(onDismissRequest = { licensesVisible = false },
                     properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
                     val view = LocalView.current
                     val dark = isSystemInDarkTheme()
@@ -108,7 +108,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
-                    LegalScreen(onBack = { about = false })
+                    LegalScreen(onBack = { licensesVisible = false })
                 }
                 state.legacySession?.let { session ->
                     AlertDialog(onDismissRequest = {}, title = { Text(AppLanguage.get(context, R.string.legacy_title)) },

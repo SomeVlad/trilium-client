@@ -42,7 +42,7 @@ val generateLegalAssets = tasks.register("generateLegalAssets") {
         directory.deleteRecursively()
         directory.mkdirs()
         val index = mutableListOf<String>()
-        for ((source, title) in mapOf("NOTICE" to "Об этом приложении", "LICENSE" to "GNU GPL 3.0", "THIRD_PARTY_NOTICES.md" to "Сторонние компоненты")) {
+        for ((source, title) in mapOf("NOTICE" to "Авторские права и условия", "LICENSE" to "GNU GPL 3.0", "THIRD_PARTY_NOTICES.md" to "Сторонние компоненты")) {
             rootProject.file(source).copyTo(directory.resolve("$source.txt"), overwrite = true)
             index += "licenses/$source.txt\t$title"
         }
@@ -121,8 +121,8 @@ android {
         applicationId = "ru.vlad.triliumnotes"
         minSdk = 28
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.4.3"
+        versionCode = 18
+        versionName = "0.4.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
     }

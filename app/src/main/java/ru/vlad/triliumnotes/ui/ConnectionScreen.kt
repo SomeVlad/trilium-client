@@ -36,7 +36,7 @@ fun ConnectionScreen(
     error: String? = null,
     storageFailed: Boolean = false,
     onResetStorage: () -> Unit = {},
-    onAbout: () -> Unit = {},
+    onLicenses: () -> Unit = {},
     onLanguageSelected: (String) -> Unit = {},
     onConnect: (String, String, Boolean, Boolean) -> Unit,
 ) {
@@ -121,7 +121,10 @@ fun ConnectionScreen(
                     TextButton(onClick = onResetStorage, enabled = !busy) { Text(AppLanguage.get(context, R.string.reset_connection)) }
                 }
                 LanguageSetting(onLanguageSelected, enabled = !busy)
-                TextButton(onClick = onAbout) { Text(AppLanguage.get(context, R.string.about)) }
+                TextButton(onClick = onLicenses,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
+                    Text(AppLanguage.get(context, R.string.licenses), style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }
@@ -136,7 +139,7 @@ fun ConnectionSettingsScreen(
     error: String?,
     onBack: () -> Unit,
     onDisconnect: () -> Unit,
-    onAbout: () -> Unit = {},
+    onLicenses: () -> Unit = {},
     onLanguageSelected: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -163,7 +166,10 @@ fun ConnectionSettingsScreen(
             OutlinedButton(onClick = { confirm = true }, enabled = !busy,
                 modifier = Modifier.testTag("connection-disconnect")) { Text(AppLanguage.get(context, R.string.change_server)) }
             LanguageSetting(onLanguageSelected, enabled = !busy)
-            TextButton(onClick = onAbout) { Text(AppLanguage.get(context, R.string.about)) }
+            TextButton(onClick = onLicenses,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
+                Text(AppLanguage.get(context, R.string.licenses), style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
     if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text(AppLanguage.get(context, R.string.disconnect_title)) },

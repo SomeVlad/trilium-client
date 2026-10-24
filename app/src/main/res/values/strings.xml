@@ -15,7 +15,7 @@
     <string name="connecting">"Подключение…"</string>
     <string name="connect">"Подключиться"</string>
     <string name="reset_connection">"Сбросить подключение"</string>
-    <string name="about">"О приложении"</string>
+    <string name="licenses">"Лицензии"</string>
     <string name="connection">"Подключение"</string>
     <string name="back">"Назад"</string>
     <string name="trilium_server">"Сервер Trilium"</string>
@@ -26,9 +26,6 @@
     <string name="sign_out">"Выйти"</string>
     <string name="cancel">"Отмена"</string>
     <string name="license">"Лицензия"</string>
-    <string name="about_description">"Свободное приложение для Trilium.\n© 2026 участники проекта trilium-client.\nGNU GPL 3.0 или более поздняя версия. Программа предоставляется без гарантий."</string>
-    <string name="source_code">"Исходный код"</string>
-    <string name="licenses_notices">"Лицензии и уведомления"</string>
     <string name="sync_error">"Ошибка синхронизации"</string>
     <string name="no_internet">"Нет интернета"</string>
     <string name="updating_notes">"Обновление заметок"</string>
@@ -147,7 +144,6 @@
     <string name="legacy_confirm">"Это мой прежний сервер"</string>
     <string name="legacy_skip">"Не переносить"</string>
     <string name="pending_retained">"Не отправлено изменений: %1$d. Они сохранятся до следующего входа на этот сервер."</string>
-    <string name="version_name">"Trilium Client %1$s"</string>
     <string name="conflict_count">"Конфликтов: %1$d"</string>
     <string name="sending_count">"Отправка изменений: %1$d"</string>
     <string name="unsent_count">"Не отправлено: %1$d"</string>
@@ -166,7 +162,7 @@
     <string name="delete_title">"Удалить «%1$s»?"</string>
     <string name="legacy_message">"На телефоне найдена прежняя локальная копия. Это данные сервера %1$s? Перенос разрешит их синхронизацию. Уже загруженная копия этого сервера будет заменена, если в ней нет неотправленных правок."</string>
     <string name="legacy_pending">"Не отправлено изменений: %1$d."</string>
-    <string name="legal_about_app">"Об этом приложении"</string>
+    <string name="legal_copyright_terms">"Авторские права и условия"</string>
     <string name="legal_third_party">"Сторонние компоненты"</string>
     <string name="notes">Заметки</string>
     <string name="legal_editor_notice">CKEditor — происхождение и изменения</string>

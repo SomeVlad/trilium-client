@@ -27,12 +27,19 @@ class LegalScreenTest {
                 else Text("Возврат из лицензий")
             }
         }
-        compose.onNodeWithText("О приложении").assertIsDisplayed()
+        compose.onNodeWithText("Лицензии").assertIsDisplayed()
+        compose.onNodeWithText("О приложении").assertDoesNotExist()
+        compose.onNodeWithText("Исходный код").assertDoesNotExist()
+        compose.onNodeWithText("Trilium Client", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("Авторские права и условия").performClick()
+        compose.onNodeWithText("Copyright (C) 2026 trilium-client contributors", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("ANY WARRANTY", substring = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Назад").performClick()
         compose.onNodeWithText("GNU GPL 3.0").performScrollTo().performClick()
         compose.onNodeWithText("Лицензия").assertIsDisplayed()
         compose.onNodeWithText("GNU GENERAL PUBLIC LICENSE", substring = true).assertIsDisplayed()
         compose.onNodeWithContentDescription("Назад").performClick()
-        compose.onNodeWithText("О приложении").assertIsDisplayed()
+        compose.onNodeWithText("Лицензии").assertIsDisplayed()
         compose.runOnIdle { assertTrue("First back must return to the legal list", showLegal) }
         compose.onNodeWithContentDescription("Назад").performClick()
         compose.onNodeWithText("Возврат из лицензий").assertIsDisplayed()

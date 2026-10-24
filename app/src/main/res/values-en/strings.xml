@@ -15,7 +15,7 @@
     <string name="connecting">"Connecting…"</string>
     <string name="connect">"Connect"</string>
     <string name="reset_connection">"Reset connection"</string>
-    <string name="about">"About"</string>
+    <string name="licenses">"Licenses"</string>
     <string name="connection">"Connection"</string>
     <string name="back">"Back"</string>
     <string name="trilium_server">"Trilium server"</string>
@@ -26,9 +26,6 @@
     <string name="sign_out">"Sign out"</string>
     <string name="cancel">"Cancel"</string>
     <string name="license">"License"</string>
-    <string name="about_description">"Free software for Trilium.\n© 2026 trilium-client contributors.\nGNU GPL 3.0 or later. This program comes with no warranty."</string>
-    <string name="source_code">"Source code"</string>
-    <string name="licenses_notices">"Licenses and notices"</string>
     <string name="sync_error">"Sync error"</string>
     <string name="no_internet">"No internet connection"</string>
     <string name="updating_notes">"Updating notes"</string>
@@ -147,7 +144,6 @@
     <string name="legacy_confirm">"This is my previous server"</string>
     <string name="legacy_skip">"Do not import"</string>
     <string name="pending_retained">"Unsent changes: %1$d. They will be kept until you next sign in to this server."</string>
-    <string name="version_name">"Trilium Client %1$s"</string>
     <string name="conflict_count">"Conflicts: %1$d"</string>
     <string name="sending_count">"Sending changes: %1$d"</string>
     <string name="unsent_count">"Unsent: %1$d"</string>
@@ -166,7 +162,7 @@
     <string name="delete_title">"Delete “%1$s”?"</string>
     <string name="legacy_message">"An earlier local copy was found on this phone. Does it belong to server %1$s? Importing it will allow it to sync. Any existing downloaded copy of this server will be replaced if it has no unsent changes."</string>
     <string name="legacy_pending">"Unsent changes: %1$d."</string>
-    <string name="legal_about_app">"About this app"</string>
+    <string name="legal_copyright_terms">"Copyright and terms"</string>
     <string name="legal_third_party">"Third-party components"</string>
     <string name="notes">Notes</string>
     <string name="legal_editor_notice">CKEditor — origin and modifications</string>

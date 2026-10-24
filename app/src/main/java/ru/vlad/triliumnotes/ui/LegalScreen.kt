@@ -3,8 +3,6 @@ package ru.vlad.triliumnotes.ui
 import ru.vlad.triliumnotes.AppLanguage
 import ru.vlad.triliumnotes.R
 
-import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -21,7 +19,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import ru.vlad.triliumnotes.BuildConfig
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,26 +34,13 @@ fun LegalScreen(onBack: () -> Unit) {
     val entry = entries.firstOrNull { it.first == selected }
     fun back() { if (entry == null) onBack() else selected = null }
     BackHandler { back() }
-    Scaffold(topBar = { TopAppBar(title = { Text(if (entry == null) AppLanguage.get(context, R.string.about) else AppLanguage.get(context, R.string.license)) },
+    Scaffold(topBar = { TopAppBar(title = { Text(if (entry == null) AppLanguage.get(context, R.string.licenses) else AppLanguage.get(context, R.string.license)) },
         navigationIcon = { IconButton(onClick = ::back) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, AppLanguage.get(context, R.string.back)) } }) }) { padding ->
         if (entry == null) {
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(24.dp)) {
-                item {
-                    Text(AppLanguage.get(context, R.string.version_name, BuildConfig.VERSION_NAME), style = MaterialTheme.typography.titleLarge)
-                    Spacer(Modifier.height(12.dp))
-                    Text(AppLanguage.get(context, R.string.about_description),
-                        style = MaterialTheme.typography.bodyMedium)
-                    TextButton(onClick = {
-                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW,
-                            Uri.parse("https://github.com/SomeVlad/trilium-client"))) }
-                    }) { Text(AppLanguage.get(context, R.string.source_code)) }
-                    Spacer(Modifier.height(12.dp))
-                    Text(AppLanguage.get(context, R.string.licenses_notices), style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                }
                 items(entries, key = { it.first }) { (path, title) ->
                     Text(when (path) {
-                        "licenses/NOTICE.txt" -> AppLanguage.get(context, R.string.legal_about_app)
+                        "licenses/NOTICE.txt" -> AppLanguage.get(context, R.string.legal_copyright_terms)
                         "licenses/THIRD_PARTY_NOTICES.md.txt" -> AppLanguage.get(context, R.string.legal_third_party)
                         "editor/vendor/NOTICE.txt" -> AppLanguage.get(context, R.string.legal_editor_notice)
                         "editor/vendor/LICENSE.md" -> AppLanguage.get(context, R.string.legal_editor_components)
