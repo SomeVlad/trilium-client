@@ -9,14 +9,16 @@ import kotlinx.coroutines.withContext
 class NotesSyncWorker internal constructor(
     context: Context,
     parameters: WorkerParameters,
-    private val services: NotesServices,
+    private val suppliedServices: NotesServices?,
 ) : CoroutineWorker(context, parameters) {
     constructor(context: Context, parameters: WorkerParameters) :
-        this(context, parameters, NotesServices.get(context))
+        this(context, parameters, null)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        // Work queued before upload-only jobs were introduced has no input and
-        // must retain its original full-copy behavior, including periodic work.
+        val services = suppliedServices ?: NotesServices.current(applicationContext) ?: return@withContext Result.success()
+        // A queued request belongs to one login generation. Old jobs cannot borrow a new token.
+        if (services.sessionId != inputData.getString(NotesSyncScheduler.SESSION_ID))
+            return@withContext Result.success()
         val offline = if (inputData.getBoolean(NotesSyncScheduler.UPLOAD_ONLY, false)) {
             services.repository.syncPending()
             null

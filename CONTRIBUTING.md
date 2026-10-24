@@ -1,6 +1,6 @@
 # Contributing
 
-This is an early source-release preview. Small, focused fixes and clear reports of reproducible problems are welcome. For a larger change, describe the intended behavior in an issue before investing in an implementation.
+This is an early Android client release. Small, focused fixes and clear reports of reproducible problems are welcome. For a larger change, describe the intended behavior in an issue before investing in an implementation.
 
 ## Local setup
 
@@ -10,7 +10,7 @@ Install JDK 17 and Android SDK 36, then set `ANDROID_HOME` or configure `sdk.dir
 ./gradlew -PdemoBuild=true :app:testDebugUnitTest :app:lintRelease :app:assembleDebug
 ```
 
-The demo flag ignores local server and signing settings. It produces a disconnected app with a dummy token and a non-routable endpoint, not a working sample server. To connect to your own Trilium instance, follow the [README](README.md); keep configured APKs private because they contain your connection credentials.
+All builds use on-device connection setup; build-time server credentials are no longer supported. The compatibility `demoBuild` flag only ignores local release signing settings. Use synthetic server URLs and credentials in tests; the [README](README.md) describes normal setup.
 
 With an emulator or device connected, Android instrumentation tests can be run with:
 
@@ -24,6 +24,6 @@ Use an isolated test device or emulator: UI tests exercise app storage and lifec
 
 Keep changes focused and explain the user-visible result. Include the checks you ran and any remaining limitation. Test behavior that could lose drafts, change sync ordering or delete notes; do not rely only on screenshots for those changes.
 
-Do not submit tokens, private server URLs, signing keys, connected APKs, real note content or fixtures derived from a private library. Use synthetic titles, bodies and attachments in tests, logs and screenshots. Remove identifying details before opening an issue or pull request.
+Do not submit tokens, private server URLs, signing keys, APKs from older versions with embedded credentials, real note content or fixtures derived from a private library. Use synthetic titles, bodies and attachments in tests, logs and screenshots. Remove identifying details before opening an issue or pull request.
 
 Contributions are made under the project's GPL-3.0-or-later license. Preserve dependency license notices when updating bundled assets.

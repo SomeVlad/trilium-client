@@ -15,7 +15,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
-import ru.vlad.triliumnotes.BuildConfig
 
 data class ResourceContent(val mimeType: String, val bytes: ByteArray)
 data class CachedAttachment(val file: File, val mimeType: String, val name: String)
@@ -60,7 +59,7 @@ internal fun resolveResourceTarget(value: String, serverUrl: String): ResourceTa
 class NoteResources(
     context: Context,
     private val api: TriliumApi,
-    private val serverUrl: String = BuildConfig.TRILIUM_BASE_URL,
+    private val serverUrl: String = api.serverUrl,
     private val anonymousClient: OkHttpClient = OkHttpClient.Builder().connectTimeout(8, TimeUnit.SECONDS)
         .callTimeout(30, TimeUnit.SECONDS).followSslRedirects(false).build(),
 ) {

@@ -22,7 +22,7 @@ The surrounding Android integration, `editor.js`, and `editor.css` are this proj
 
 ## Binary distribution
 
-This repository currently provides a source preview. The prepared CI workflow is configured to build a disconnected APK with dummy credentials; a locally connected APK contains the builder's credentials and must not be uploaded as a public release.
+Version 0.4.0 uses runtime connection setup. Its APK does not embed server credentials; older personally configured APKs must remain private. The prepared CI workflow builds and tests the same runtime-configured client without a server token or signing key.
 
 When distributing a binary, provide the corresponding source for that exact build, including the pinned editor source and build instructions, and retain all required third-party notices. A link to the development branch or a minified bundle alone is not a substitute for the corresponding source. Before a public binary release, prepare that source package and review the branding choice against the selected upstream license terms.
 

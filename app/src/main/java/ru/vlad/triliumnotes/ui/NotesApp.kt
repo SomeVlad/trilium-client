@@ -28,6 +28,8 @@ import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -45,7 +47,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import ru.vlad.triliumnotes.BuildConfig
 import ru.vlad.triliumnotes.NotesScreenState
 import ru.vlad.triliumnotes.NotesViewModel
 import ru.vlad.triliumnotes.LOCAL_SAVE_ERROR
@@ -63,7 +64,7 @@ import ru.vlad.triliumnotes.editor.SourceNoteEditor
 import ru.vlad.triliumnotes.editor.EditorResource
 
 @Composable
-fun NotesApp(model: NotesViewModel) {
+fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
     val state by model.state.collectAsStateWithLifecycle()
     val sync by model.syncState.collectAsStateWithLifecycle()
     val offline by model.offlineState.collectAsStateWithLifecycle()
@@ -71,7 +72,7 @@ fun NotesApp(model: NotesViewModel) {
     var attachmentUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var linkError by remember { mutableStateOf<String?>(null) }
     fun openLink(value: String) {
-        if (resolveResourceTarget(value, BuildConfig.TRILIUM_BASE_URL) != null) {
+        if (resolveResourceTarget(value, model.serverUrl) != null) {
             attachmentUrl = value
             return
         }
@@ -97,7 +98,8 @@ fun NotesApp(model: NotesViewModel) {
             onOpen = model::open, onFolder = model::enterFolder, onOpenFolderContent = model::openCurrentFolder,
             offline = offline,
             onOpenConflict = { sync.conflicts.firstOrNull()?.let(model::openById) }, onDelete = model::delete,
-            listState = listState)
+            listState = listState, onCreateFolder = model::createFolder,
+            onConnectionSettings = onConnectionSettings)
     } else {
         key(document.note.id) {
             EditorScreen(state, document, sync, onBack = model::back,
@@ -107,11 +109,11 @@ fun NotesApp(model: NotesViewModel) {
                 onOpenNote = model::openById, onOpenLink = ::openLink,
                 resourceLoader = { path -> model.loadResource(path)?.let { EditorResource(it.mimeType, it.bytes) } },
                 attachmentLoader = model::loadAttachment, onRetryLocalSave = model::retryLocalSave,
-                onDelete = { model.delete(document.note) })
+                onDelete = { model.delete(document.note) }, serverUrl = model.serverUrl)
         }
     }
     attachmentUrl?.let { url ->
-        val target = resolveResourceTarget(url, BuildConfig.TRILIUM_BASE_URL)
+        val target = resolveResourceTarget(url, model.serverUrl)
         if (target != null) {
             val name = Uri.decode(Uri.parse(url).path.orEmpty().substringAfterLast('/'))
                 .takeUnless { it.isBlank() || it == "download" || it == "content" } ?: "Вложение"
@@ -158,6 +160,8 @@ internal fun LibraryScreen(
     onOpenConflict: (() -> Unit)? = null,
     onDelete: ((NoteMeta) -> Unit)? = null,
     listState: LazyListState = rememberLazyListState(),
+    onCreateFolder: ((String) -> Unit)? = null,
+    onConnectionSettings: (() -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val searching = state.query.isNotBlank()
@@ -166,6 +170,9 @@ internal fun LibraryScreen(
     val inFolder = state.folders.size > 1
     val folder = state.folders.last()
     var deleteTarget by remember { mutableStateOf<NoteMeta?>(null) }
+    var createMenuExpanded by remember { mutableStateOf(false) }
+    var showFolderDialog by rememberSaveable { mutableStateOf(false) }
+    var folderTitle by rememberSaveable { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     fun dismissKeyboard() { focusManager.clearFocus(); keyboard?.hide() }
@@ -195,6 +202,13 @@ internal fun LibraryScreen(
                         Text(folder.title, style = MaterialTheme.typography.titleLarge,
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
+                    if (!inFolder && onConnectionSettings != null) {
+                        IconButton(onClick = { dismissKeyboard(); onConnectionSettings() },
+                            enabled = !busy && !state.localWritePending && state.deletingNoteId == null,
+                            modifier = Modifier.testTag("connection-settings")) {
+                            Icon(Icons.Outlined.Settings, "Настройки подключения")
+                        }
+                    }
                     if (inFolder) state.currentFolderNote?.let { note ->
                         NoteActionsMenu(note, onDelete?.let { { dismissKeyboard(); deleteTarget = note } },
                             enabled = !busy && state.deletingNoteId == null)
@@ -208,12 +222,34 @@ internal fun LibraryScreen(
             }
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { if (!busy) { dismissKeyboard(); onCreate() } },
-                modifier = Modifier.testTag("create-note").semantics { if (busy) disabled() },
-                containerColor = if (busy) colors.surfaceVariant else colors.primaryContainer,
-                contentColor = if (busy) colors.onSurfaceVariant else colors.onPrimaryContainer,
-                shape = RoundedCornerShape(18.dp)) {
-                Icon(Icons.Outlined.Add, contentDescription = "Создать заметку")
+            Box {
+                FloatingActionButton(onClick = {
+                    if (!busy && state.deletingNoteId == null) {
+                        dismissKeyboard()
+                        if (onCreateFolder == null) onCreate() else createMenuExpanded = true
+                    }
+                },
+                    modifier = Modifier.testTag("create-note").semantics { if (busy) disabled() },
+                    containerColor = if (busy) colors.surfaceVariant else colors.primaryContainer,
+                    contentColor = if (busy) colors.onSurfaceVariant else colors.onPrimaryContainer,
+                    shape = RoundedCornerShape(18.dp)) {
+                    Icon(Icons.Outlined.Add, contentDescription = "Создать заметку или папку")
+                }
+                DropdownMenu(expanded = createMenuExpanded && !busy,
+                    onDismissRequest = { createMenuExpanded = false }) {
+                    DropdownMenuItem(text = { Text("Новая заметка") },
+                        leadingIcon = { Icon(Icons.Outlined.NoteAdd, null) },
+                        modifier = Modifier.testTag("new-note-menu"),
+                        onClick = { createMenuExpanded = false; onCreate() })
+                    DropdownMenuItem(text = { Text("Новая папка") },
+                        leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, null) },
+                        modifier = Modifier.testTag("new-folder-menu"),
+                        onClick = {
+                            createMenuExpanded = false
+                            folderTitle = ""
+                            showFolderDialog = true
+                        })
+                }
             }
         },
     ) { padding ->
@@ -305,6 +341,35 @@ internal fun LibraryScreen(
             }
         }
     }
+    if (showFolderDialog) {
+        val titleFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) { titleFocus.requestFocus() }
+        AlertDialog(onDismissRequest = { showFolderDialog = false },
+            modifier = Modifier.testTag("new-folder-dialog"),
+            title = { Text("Новая папка") },
+            text = {
+                OutlinedTextField(value = folderTitle, onValueChange = { folderTitle = it },
+                    label = { Text("Название папки") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().focusRequester(titleFocus).testTag("new-folder-title"),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = {
+                        if (folderTitle.isNotBlank() && !busy) {
+                            showFolderDialog = false
+                            dismissKeyboard()
+                            onCreateFolder?.invoke(folderTitle.trim())
+                        }
+                    }))
+            },
+            confirmButton = {
+                TextButton(enabled = folderTitle.isNotBlank() && !busy,
+                    modifier = Modifier.testTag("confirm-create-folder"), onClick = {
+                        showFolderDialog = false
+                        dismissKeyboard()
+                        onCreateFolder?.invoke(folderTitle.trim())
+                    }) { Text("Создать") }
+            },
+            dismissButton = { TextButton(onClick = { showFolderDialog = false }) { Text("Отмена") } })
+    }
     deleteTarget?.let { note ->
         DeleteNoteDialog(note, onDismiss = { deleteTarget = null }, onConfirm = {
             deleteTarget = null
@@ -339,7 +404,7 @@ internal fun noteKind(note: NoteMeta): String = when {
     note.type == "code" -> "Код · ${note.mime.substringAfterLast('/')}"
     note.type == "image" -> "Изображение"
     note.type == "file" -> attachmentFormat(note.mime, note.title)
-    note.type == "book" -> "Книга"
+    note.type == "book" -> "Папка"
     note.type == "canvas" -> "Холст"
     note.type == "mermaid" -> "Диаграмма Mermaid"
     note.type == "relationMap" -> "Карта связей"
@@ -355,7 +420,7 @@ internal fun noteKind(note: NoteMeta): String = when {
 internal fun NoteRow(note: NoteMeta, prefix: String, onOpen: () -> Unit, onFolder: () -> Unit,
     onDelete: (() -> Unit)? = null, deleteEnabled: Boolean = true) {
     val colors = MaterialTheme.colorScheme
-    val folder = note.childBranchIds.isNotEmpty()
+    val folder = note.childBranchIds.isNotEmpty() || note.type == "book"
     Row(Modifier.fillMaxWidth().testTag("note-row-${note.id}").clip(RoundedCornerShape(12.dp))
         .clickable(onClickLabel = if (folder) "Открыть вложенные заметки" else "Открыть заметку",
             onClick = if (folder) onFolder else onOpen)
@@ -401,6 +466,7 @@ internal fun EditorScreen(
     attachmentLoader: suspend (NoteMeta) -> CachedAttachment = { error("Файл пока не загружен") },
     onRetryLocalSave: () -> Unit = {},
     onDelete: (() -> Unit)? = null,
+    serverUrl: String = "",
 ) {
     val colors = MaterialTheme.colorScheme
     val initialHtml = remember { document.html }
@@ -494,7 +560,7 @@ internal fun EditorScreen(
                     modifier = Modifier.padding(horizontal = 20.dp))
             }
             if (document.note.isProtected || (readOnly && !htmlNote && !attachment)) {
-                SpecialNoteContent(document.note, initialHtml, onOpenLink, Modifier.fillMaxWidth().weight(1f))
+                SpecialNoteContent(document.note, initialHtml, onOpenLink, Modifier.fillMaxWidth().weight(1f), serverUrl)
             } else if (attachment) {
                 AttachmentViewer(document.note, attachmentLoader, Modifier.fillMaxWidth().weight(1f))
             } else if (htmlNote) {
@@ -585,7 +651,7 @@ private fun DeleteNoteDialog(note: NoteMeta, onDismiss: () -> Unit, onConfirm: (
 /** Preserve special formats without presenting their internal data as a rendered document. */
 @Composable
 private fun SpecialNoteContent(note: NoteMeta, source: String, onOpenLink: (String) -> Unit,
-    modifier: Modifier = Modifier) {
+    modifier: Modifier = Modifier, serverUrl: String = "") {
     var showSource by rememberSaveable(note.id) { mutableStateOf(false) }
     Column(modifier.verticalScroll(rememberScrollState()).padding(22.dp).testTag("special-note")) {
         Text(note.title.ifBlank { "Без названия" }, style = MaterialTheme.typography.headlineLarge)
@@ -597,7 +663,7 @@ private fun SpecialNoteContent(note: NoteMeta, source: String, onOpenLink: (Stri
         }, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(8.dp))
         TextButton(onClick = {
-            onOpenLink("${BuildConfig.TRILIUM_BASE_URL.trimEnd('/')}/#root/${Uri.encode(note.id)}")
+            onOpenLink("${serverUrl.trimEnd('/')}/#root/${Uri.encode(note.id)}")
         }) {
             Icon(Icons.Outlined.OpenInNew, null, Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))

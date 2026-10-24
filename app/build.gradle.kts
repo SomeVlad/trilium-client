@@ -7,23 +7,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// An explicit demo build also ignores local files, so CI artifacts cannot use personal credentials.
+// Kept for existing CI commands: demoBuild now only disables local release signing.
+// Server addresses and credentials are always entered on the device.
 val demoBuild = providers.gradleProperty("demoBuild").map {
-    it.toBooleanStrictOrNull()
-        ?: throw GradleException("demoBuild must be true or false")
+    it.toBooleanStrictOrNull() ?: throw GradleException("demoBuild must be true or false")
 }.getOrElse(false)
-val privatePropertiesFile = rootProject.file("private.properties")
-val usePrivateConfiguration = !demoBuild && privatePropertiesFile.isFile
-val privateProperties = Properties().apply {
-    if (usePrivateConfiguration) {
-        privatePropertiesFile.inputStream().use { load(it) }
-    }
-}
-val demoProperties = mapOf(
-    "trilium.baseUrl" to "https://trilium.invalid",
-    "trilium.token" to "dummy-token",
-)
-
 val signingPropertiesFile = rootProject.file("signing.properties")
 val hasReleaseSigning = !demoBuild && signingPropertiesFile.isFile
 val signingProperties = Properties().apply {
@@ -32,23 +20,9 @@ val signingProperties = Properties().apply {
     }
 }
 
-fun privateValue(name: String): String =
-    if (usePrivateConfiguration) {
-        privateProperties.getProperty(name)?.takeIf { it.isNotBlank() }
-            ?: throw GradleException("Missing $name in private.properties")
-    } else {
-        demoProperties.getValue(name)
-    }
-
 fun signingValue(name: String): String =
     signingProperties.getProperty(name)?.takeIf { it.isNotBlank() }
         ?: throw GradleException("Missing $name in signing.properties")
-
-fun String.asBuildConfigString(): String =
-    "\"" + replace("\\", "\\\\")
-        .replace("\"", "\\\"")
-        .replace("\n", "\\n")
-        .replace("\r", "\\r") + "\""
 
 android {
     namespace = "ru.vlad.triliumnotes"
@@ -58,12 +32,10 @@ android {
         applicationId = "ru.vlad.triliumnotes"
         minSdk = 28
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.3.5"
+        versionCode = 14
+        versionName = "0.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "TRILIUM_BASE_URL", privateValue("trilium.baseUrl").asBuildConfigString())
-        buildConfigField("String", "TRILIUM_TOKEN", privateValue("trilium.token").asBuildConfigString())
     }
 
     buildFeatures {

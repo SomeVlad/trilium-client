@@ -256,17 +256,28 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
     }
 
     /** Stages a note with stable client IDs, so a lost create response cannot duplicate it. */
-    suspend fun create(parentId: String, title: String, html: String): NoteDocument {
+    suspend fun create(parentId: String, title: String, html: String): NoteDocument =
+        stageCreate(parentId, title, html, "text", "text/html")
+
+    /** A native book remains a navigable folder even before it has any children. */
+    suspend fun createFolder(parentId: String, title: String): NoteDocument {
+        require(title.isNotBlank()) { "Введите название папки" }
+        return stageCreate(parentId, title.trim(), "", "book", "text/html")
+    }
+
+    private suspend fun stageCreate(parentId: String, title: String, html: String,
+        type: String, mime: String): NoteDocument {
         val noteId = newId()
         val branchId = newId()
         change { next ->
             require(parentId !in deletionClosure(next)) { "Родительская заметка удалена" }
             next.counter++
-            val meta = NoteMeta(noteId, title, "text", "text/html", false,
+            val meta = NoteMeta(noteId, title, type, mime, false,
                 null, null, emptyList(), listOf(parentId))
             next.notes[noteId] = StoredNote(meta, "")
             next.pending[noteId] = Pending("create", noteId, branchId, parentId,
-                title, html, null, null, next.counter)
+                title, html, null, null, next.counter, noteType = type, noteMime = mime)
+            if (type == "book") next.children[noteId] = emptyList()
         }
         return requireNotNull(document(store, noteId))
     }

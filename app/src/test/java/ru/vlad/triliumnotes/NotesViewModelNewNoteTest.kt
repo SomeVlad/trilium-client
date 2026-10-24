@@ -113,8 +113,28 @@ class NotesViewModelNewNoteTest {
         assertEquals("", model.state.value.document!!.note.title)
     }
 
+    @Test fun creatingFolderKeepsLibraryVisibleAndCanCreateInsideAnEmptyFolderOffline() {
+        model.connectionUnavailable()
+        model.createFolder("  Новая папка  ")
+        await { !model.state.value.loading && model.state.value.items.size == 1 }
+        val folder = model.state.value.items.single().note
+        assertEquals("book", folder.type)
+        assertEquals("Новая папка", folder.title)
+        assertNull(model.state.value.document)
+
+        model.enterFolder(folder)
+        await { !model.state.value.loading }
+        assertEquals(folder.id, model.state.value.folders.last().id)
+        assertEquals(false, model.state.value.currentFolderHasContent)
+        assertTrue(model.state.value.items.isEmpty())
+        model.createFolder("Вложенная папка")
+        await { !model.state.value.loading && model.state.value.items.size == 1 }
+        assertEquals(listOf(folder.id), model.state.value.items.single().note.parentNoteIds)
+        assertNull(model.state.value.document)
+    }
+
     private fun meta(note: JSONObject) = JSONObject().put("noteId", note.getString("noteId"))
-        .put("title", note.getString("title")).put("type", "text").put("mime", "text/html")
+        .put("title", note.getString("title")).put("type", note.optString("type", "text")).put("mime", "text/html")
         .put("parentNoteIds", org.json.JSONArray().put("root")).put("childBranchIds", org.json.JSONArray())
 
     private fun await(condition: () -> Boolean) {

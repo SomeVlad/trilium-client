@@ -5,10 +5,10 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
-        android:label="Заметки"
+        android:label="Trilium Client"
         android:supportsRtl="true"
         android:theme="@style/Theme.TriliumNotes"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="true">
         <provider android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"
             android:exported="false" android:grantUriPermissions="true">

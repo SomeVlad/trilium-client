@@ -22,26 +22,22 @@ jobs:
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
-      - name: Build and test with demo configuration
+      - name: Build and test runtime connection setup
         run: ./gradlew --no-daemon -PdemoBuild=true testDebugUnitTest assembleDebug
-      - name: Verify demo configuration before upload
+      - name: Verify no build-time connection configuration
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import zipfile
-
           config = Path('app/build/generated/source/buildConfig/debug/ru/vlad/triliumnotes/BuildConfig.java').read_text()
-          assert 'TRILIUM_BASE_URL = "https://trilium.invalid";' in config, 'Unexpected demo endpoint'
-          assert 'TRILIUM_TOKEN = "dummy-token";' in config, 'Unexpected demo token'
-          with zipfile.ZipFile('app/build/outputs/apk/debug/app-debug.apk') as apk:
-              dex = b''.join(apk.read(name) for name in apk.namelist() if name.endswith('.dex'))
-          assert b'https://trilium.invalid' in dex, 'Demo endpoint missing from APK'
-          assert b'dummy-token' in dex, 'Demo token missing from APK'
+          assert 'TRILIUM_TOKEN' not in config and 'TRILIUM_BASE_URL' not in config
+          build = Path('app/build.gradle.kts').read_text()
+          assert 'private.properties' not in build
+          assert 'trilium.token' not in build and 'trilium.baseUrl' not in build
           PY
-      - name: Upload demo debug APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: trilium-client-demo-debug
+          name: trilium-client-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7

@@ -8,11 +8,24 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Surface
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ru.vlad.triliumnotes.ui.ConnectionScreen
+import ru.vlad.triliumnotes.ui.ConnectionSettingsScreen
 import ru.vlad.triliumnotes.ui.NotesApp
 import ru.vlad.triliumnotes.ui.NotesTheme
 
 class MainActivity : ComponentActivity() {
-    private val model: NotesViewModel by viewModels()
+    private val connection: ConnectionViewModel by viewModels()
+    private var model: NotesViewModel? = null
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     private var callbackRegistered = false
     private val connectionState = ConnectionState()
@@ -21,14 +34,14 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 if (!callbackRegistered || isDestroyed) return@runOnUiThread
                 val available = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                if (connectionState.update(network.networkHandle, available)) model.connectionAvailable()
-                else if (!hasValidatedInternet()) model.connectionUnavailable()
+                if (connectionState.update(network.networkHandle, available)) model?.connectionAvailable()
+                else if (!hasValidatedInternet()) model?.connectionUnavailable()
             }
         }
         override fun onLost(network: Network) {
             runOnUiThread {
                 if (callbackRegistered && !isDestroyed && connectionState.lost(network.networkHandle) && !hasValidatedInternet())
-                    model.connectionUnavailable()
+                    model?.connectionUnavailable()
             }
         }
     }
@@ -36,7 +49,44 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { NotesTheme { NotesApp(model) } }
+        setContent {
+            NotesTheme {
+                val state by connection.state.collectAsStateWithLifecycle()
+                val services = state.services
+                when {
+                    state.restoring -> Surface { Box(Modifier.fillMaxSize()) }
+                    services == null -> ConnectionScreen(state.busy, state.error, state.storageFailed,
+                        onResetStorage = connection::disconnect, onConnect = connection::connect)
+                    else -> key(services) {
+                        val notes = remember { connection.notesModel(services) }
+                        var settings by rememberSaveable { mutableStateOf(false) }
+                        val sync by notes.syncState.collectAsStateWithLifecycle()
+                        DisposableEffect(notes) {
+                            model = notes
+                            notes.appStarted()
+                            onDispose { if (model === notes) model = null }
+                        }
+                        if (settings) ConnectionSettingsScreen(services.serverUrl, sync.pendingCount,
+                            state.busy, state.error, onBack = { settings = false }, onDisconnect = connection::disconnect)
+                        else NotesApp(notes, onConnectionSettings = { settings = true })
+                    }
+                }
+                state.legacySession?.let { session ->
+                    AlertDialog(onDismissRequest = {}, title = { Text("Заметки прежней версии") },
+                        text = { Text("На телефоне найдена прежняя локальная копия" +
+                            (state.legacyPendingCount?.let { ". Не отправлено изменений: $it." } ?: ".") +
+                            " Это данные сервера ${session.serverUrl}? Перенос разрешит их синхронизацию." +
+                            " Уже загруженная копия этого сервера будет заменена, если в ней нет неотправленных правок." +
+                            (state.error?.let { "\n\n$it" } ?: "")) },
+                        confirmButton = { TextButton(onClick = { connection.finishLegacyImport(true) }, enabled = !state.busy) {
+                            Text("Это мой прежний сервер")
+                        } },
+                        dismissButton = { TextButton(onClick = { connection.finishLegacyImport(false) }, enabled = !state.busy) {
+                            Text("Не переносить")
+                        } })
+                }
+            }
+        }
     }
 
     override fun onStart() {
@@ -45,11 +95,11 @@ class MainActivity : ComponentActivity() {
             callbackRegistered = true
             connectivity.registerDefaultNetworkCallback(networkCallback)
         }
-        model.appStarted()
+        model?.appStarted()
     }
 
     override fun onStop() {
-        model.syncNow()
+        model?.syncNow()
         super.onStop()
     }
 

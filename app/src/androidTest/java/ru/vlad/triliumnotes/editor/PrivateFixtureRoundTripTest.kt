@@ -23,7 +23,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
-import ru.vlad.triliumnotes.BuildConfig
 import ru.vlad.triliumnotes.data.resolveResourceTarget
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -104,7 +103,7 @@ class PrivateFixtureRoundTripTest {
         assertTrue("Owner inline image corpus changed", internal.size == 6)
         var attachments = 0; var notes = 0; var escaped = 0; var ownerPaths = 0
         internal.forEach { path ->
-            val target = resolveResourceTarget(path, BuildConfig.TRILIUM_BASE_URL)
+            val target = resolveResourceTarget(path, "https://trilium.invalid")
             assertTrue("Owner inline image URL was rejected by native policy", target != null)
             if (target!!.attachment) attachments++ else notes++
             if (path.contains("%")) escaped++

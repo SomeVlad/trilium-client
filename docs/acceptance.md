@@ -1,8 +1,21 @@
 # Validation record
 
-This record summarizes validation of app version **0.3.5** before source-release preparation. It is not a claim that every Android device or Trilium version is supported. Public screenshots and the scenarios below use synthetic notes and attachments.
+This record includes validation of **0.4.0** runtime authentication and folders, followed by the earlier **0.3.5** baseline. It is not a claim that every Android device or Trilium version is supported. Public screenshots and the scenarios below use synthetic notes and attachments.
 
-## Recorded results
+## Version 0.4.0
+
+- 122 JVM tests passed with no failures or skips: password and token authentication, invalid credentials, HTML proxy challenges, redirect refusal, URL normalization, encrypted-session handling, per-server storage, stale background work, explicit legacy import, folder persistence and parent ordering, plus the existing repository suite.
+- 11 unique Android checks passed on an Android 16 / API 36 emulator: six connection UI checks, three folder UI checks, resume sync lifecycle, and the new real-Activity connection lifecycle scenario. Eighteen screenshots cover both themes.
+- The connection lifecycle check uses Android Keystore on the emulator. It verifies the password is absent from persisted session data, the token and URL are encrypted, a durable draft survives Activity recreation, session restoration does not authenticate again, and sign-out/relogin preserves the draft.
+- An isolated actual Trilium **0.106.0** accepted password login (201), rejected a wrong password (401), accepted token-authenticated app-info/root requests, and created a native empty `book` with a text-note child. No production note data was used.
+
+- The signed APK installed over 0.3.5 without uninstalling. A synthetic unsent legacy edit was explicitly imported, reached the actual test server, and its original local cache remained byte-for-byte intact.
+- On the signed APK, wrong-password and successful password login, token login, local sign-out and relogin all passed against that actual server. Local sign-out did not revoke the separately supplied token.
+- With Wi-Fi and mobile data disabled, the existing session reopened after force-stop. An empty folder and child note created offline survived another force-stop and synchronized after reconnect; server reads verified `type=book` and the child's parent ID.
+- Real MainActivity screenshots at 360 dp verified login and folder creation with the keyboard visible, the error state, legacy confirmation, and offline restart. The independent product reviewer accepted these and the light/dark matrix.
+- Debug/instrumentation/release compilation and release lint completed; lint has 0 errors and 21 pre-existing warnings. The APK is signed with the same certificate as 0.3.5. Inspection found neither the prior personal server address nor token in its code/resources.
+
+## Version 0.3.5 baseline
 
 | Check | Result |
 | --- | --- |
@@ -25,8 +38,8 @@ Folder and search scroll restoration passed using Android's system Back key comm
 - Deletion has no client-side undo. Unsupported special note types are described in the [README](../README.md).
 - Source-release configuration changes require their own build checks; the results above describe the app acceptance run, not a new run of that suite after every documentation change.
 
-The [synthetic screenshots](screenshots/) illustrate the UI. For reproducible local commands, see [CONTRIBUTING.md](../CONTRIBUTING.md); the [prepared CI workflow](../ci/build.yml) uses the disconnected demo configuration and is not yet active.
+The [synthetic screenshots](screenshots/) illustrate the UI. For reproducible local commands, see [CONTRIBUTING.md](../CONTRIBUTING.md); the [prepared CI workflow](../ci/build.yml) builds the runtime-configured APK and is not yet active.
 
-## Source-preview preparation
+## Earlier source-preview preparation
 
 A clean checkout with no private properties, signing properties, or release key passed all 100 JVM tests, `assembleDebug`, and release lint (0 errors, 21 warnings). The resulting APK contains only the `.invalid` endpoint and dummy token. A separate `-PdemoBuild=true` run also passed with private local configuration present, confirming that demo mode ignores it. This run did not repeat the Android device scenarios above because application behavior was unchanged.

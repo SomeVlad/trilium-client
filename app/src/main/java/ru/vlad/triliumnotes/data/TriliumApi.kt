@@ -80,14 +80,17 @@ class UnexpectedHtmlResponseException(val status: Int) :
 class TriliumApi(
     baseUrl: String,
     token: String,
-    private val client: OkHttpClient = OkHttpClient.Builder()
+    client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .callTimeout(8, TimeUnit.SECONDS)
         .build(),
 ) {
+    private val client = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    @Volatile private var active = true
+    val serverUrl: String = baseUrl.trimEnd('/')
     private val base: HttpUrl = (baseUrl.trimEnd('/') + "/etapi/").toHttpUrl()
     private val serverRoot = (baseUrl.trimEnd('/') + "/").toHttpUrl()
-    private val authorization = "Bearer ${token.removePrefix("Bearer ").trim()}"
+    private val authorization = token.removePrefix("Bearer ").trim()
     private val binaryClient = client.newBuilder()
         .callTimeout(60, TimeUnit.SECONDS)
         .followRedirects(false)
@@ -95,7 +98,24 @@ class TriliumApi(
         .build()
 
     init {
-        require(authorization.length > "Bearer ".length)
+        require(authorization.isNotBlank() && authorization.all { it in '!'..'~' }) { "Некорректный ETAPI-токен" }
+    }
+
+    /** Deactivating a session also stops requests issued by an old foreground model. */
+    fun close() {
+        active = false
+        client.dispatcher.cancelAll()
+        binaryClient.dispatcher.cancelAll()
+    }
+
+    private fun checkActive() {
+        if (!active) throw CancellationException("Session ended")
+    }
+
+    suspend fun validateSession() {
+        val info = JSONObject(send("GET", endpoint("app-info")))
+        if (info.optString("appVersion").isBlank()) throw IOException("Invalid Trilium app-info response")
+        if (getNote("root").id != "root") throw IOException("Invalid Trilium root response")
     }
 
     suspend fun getNote(noteId: String): NoteMeta =
@@ -226,8 +246,10 @@ class TriliumApi(
     }.build()
 
     private suspend fun sendBytes(url: HttpUrl): BinaryContent = withContext(Dispatchers.IO) {
+        checkActive()
         val request = Request.Builder().url(url).header("Authorization", authorization).build()
         binaryClient.newCall(request).execute().use { response ->
+            checkActive()
             val bytes = response.body?.bytes() ?: byteArrayOf()
             if (isKnownCrowdSecCaptchaPage(bytes.toString(Charsets.UTF_8)))
                 throw UnexpectedHtmlResponseException(response.code)
@@ -244,12 +266,14 @@ class TriliumApi(
         contentType: String = "application/json; charset=utf-8",
         allowsHtmlBody: Boolean = false,
     ): String = withContext(Dispatchers.IO) {
+        checkActive()
         val request = Request.Builder()
             .url(url)
             .header("Authorization", authorization)
             .method(method, content?.toRequestBody(contentType.toMediaType()))
             .build()
         client.newCall(request).execute().use { response ->
+            checkActive()
             val body = response.body?.string().orEmpty()
             if ((allowsHtmlBody && isKnownCrowdSecCaptchaPage(body)) ||
                 (!allowsHtmlBody && isHtmlInsteadOfJson(response.header("Content-Type"), body))) {
@@ -270,7 +294,7 @@ private val crowdSecChallengeUrl = Regex("""\bdata-challenge-url\s*=""", RegexOp
 private fun isKnownCrowdSecCaptchaPage(body: String): Boolean =
     crowdSecCaptchaTitle.containsMatchIn(body) && crowdSecChallengeUrl.containsMatchIn(body)
 
-private fun isHtmlInsteadOfJson(contentType: String?, body: String): Boolean {
+internal fun isHtmlInsteadOfJson(contentType: String?, body: String): Boolean {
     val start = body.trimStart().take(512)
     val prefix = start.lowercase(Locale.ROOT)
     val htmlBody = prefix.startsWith("<!doctype html") || prefix.startsWith("<html") ||

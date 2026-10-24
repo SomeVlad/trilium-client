@@ -44,6 +44,8 @@ class NotesSyncWorkerTest {
     private lateinit var context: Context
     private lateinit var services: NotesServices
     private lateinit var factory: WorkerFactory
+    private val singleton = NotesServices::class.java.getDeclaredField("instance").apply { isAccessible = true }
+    private var previousServices: Any? = null
     @Volatile private var unavailable = false
     @Volatile private var draftDuringAttachments = false
     @Volatile private var includeChild = false
@@ -53,6 +55,8 @@ class NotesSyncWorkerTest {
     private var releaseChildAttachments: CountDownLatch? = null
 
     @Before fun start() {
+        previousServices = singleton.get(null)
+        singleton.set(null, null)
         directory = Files.createTempDirectory("notes-worker-test").toFile()
         context = object : ContextWrapper(RuntimeEnvironment.getApplication()) {
             override fun getFilesDir(): File = directory
@@ -89,6 +93,7 @@ class NotesSyncWorkerTest {
         server.start()
         val url = server.url("/").toString()
         services = NotesServices(context, TriliumApi(url, "test-token"), url)
+        singleton.set(null, services)
         factory = object : WorkerFactory() {
             override fun createWorker(appContext: Context, workerClassName: String,
                 workerParameters: WorkerParameters): ListenableWorker? =
@@ -98,6 +103,7 @@ class NotesSyncWorkerTest {
     }
 
     @After fun stop() {
+        singleton.set(null, previousServices)
         releaseChildAttachments?.countDown()
         server.shutdown()
         directory.deleteRecursively()
@@ -283,6 +289,19 @@ class NotesSyncWorkerTest {
         assertEquals(WorkInfo.State.SUCCEEDED, runPending(manager, NotesSyncScheduler.ONE_TIME_WORK_NAME).state)
         assertTrue(services.offline.state.value.complete)
         assertTrue(services.repository.offlineCopyAvailable)
+    }
+
+    @Test fun queuedWorkForAnotherLoginCannotUseCurrentCredentials() = runBlocking {
+        val current = NotesServices(context, services.api, server.url("/").toString(), "current-login")
+        val isolatedFactory = object : WorkerFactory() {
+            override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters): ListenableWorker? =
+                NotesSyncWorker(appContext, workerParameters, current)
+        }
+        val stale = TestListenableWorkerBuilder<NotesSyncWorker>(context)
+            .setInputData(androidx.work.workDataOf(NotesSyncScheduler.SESSION_ID to "old-login"))
+            .setWorkerFactory(isolatedFactory).build()
+        assertEquals(ListenableWorker.Result.success(), stale.doWork())
+        assertEquals(0, server.requestCount)
     }
 
     @Test fun foregroundAndBackgroundLookupsShareOneRepository() {

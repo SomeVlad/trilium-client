@@ -49,8 +49,10 @@ data class NotesScreenState(
     val deletingNoteId: String? = null,
 )
 
-class NotesViewModel(application: Application) : AndroidViewModel(application) {
-    private val services = NotesServices.get(application)
+class NotesViewModel(application: Application,
+    private val services: NotesServices = NotesServices.get(application),
+) : AndroidViewModel(application) {
+    val serverUrl = services.serverUrl
     private val repository = services.repository
     private val resources = services.resources
     val offlineState = services.offline.state
@@ -317,6 +319,33 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 mutable.update { it.copy(loading = false, error = "Не удалось создать заметку на телефоне.") }
+            }
+        }
+    }
+
+    fun createFolder(title: String) {
+        val current = mutable.value
+        if (title.isBlank() || current.loading || current.localWritePending ||
+            current.deletingNoteId != null || current.document != null) return
+        val parent = current.folders.last().id
+        val request = ++navigationVersion
+        folderJob?.cancel()
+        searchJob?.cancel()
+        mutable.update { it.copy(loading = true, searching = false, error = null) }
+        viewModelScope.launch {
+            try {
+                repository.createFolder(parent, title)
+                if (request == navigationVersion && mutable.value.folders.last().id == parent) {
+                    mutable.update { it.copy(items = repository.cachedChildren(parent).orEmpty(),
+                        query = "", results = emptyList(), loading = false) }
+                }
+                scheduleSync()
+                NotesSyncScheduler.schedulePending(getApplication())
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (request == navigationVersion) mutable.update {
+                    it.copy(loading = false, error = "Не удалось создать папку на телефоне.")
+                }
             }
         }
     }

@@ -109,6 +109,7 @@ class DeleteAcceptanceTest {
 
                 // Actual create button and physical text input into the new title, then delete.
                 compose.onNodeWithTag("create-note").performClick()
+                compose.onNodeWithTag("new-note-menu").performClick()
                 waitTag("note-editor")
                 compose.waitUntil(15_000) { webTitleFocused() }
                 instrumentation.sendStringSync("CreatedOfflineQA")
