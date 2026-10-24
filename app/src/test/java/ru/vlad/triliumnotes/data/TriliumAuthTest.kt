@@ -115,11 +115,11 @@ class TriliumAuthTest {
             TriliumAuth().authenticate(server.url("/").toString(), secret, useToken = true, allowInsecureHttp = true)
             fail("Expected invalid token")
         } catch (error: IllegalArgumentException) {
-            assertFalse(authFailureMessage(error).contains("private-token"))
-            assertFalse(authFailureMessage(error).contains("exfiltrate"))
+            assertFalse(authFailureMessage(org.robolectric.RuntimeEnvironment.getApplication(), error).contains("private-token"))
+            assertFalse(authFailureMessage(org.robolectric.RuntimeEnvironment.getApplication(), error).contains("exfiltrate"))
         }
         assertEquals(0, server.requestCount)
-        assertFalse(authFailureMessage(IllegalArgumentException("secret-value")).contains("secret-value"))
+        assertFalse(authFailureMessage(org.robolectric.RuntimeEnvironment.getApplication(), IllegalArgumentException("secret-value")).contains("secret-value"))
     }
 
 }

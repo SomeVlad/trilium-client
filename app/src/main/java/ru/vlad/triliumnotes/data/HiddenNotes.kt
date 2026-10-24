@@ -2,7 +2,7 @@ package ru.vlad.triliumnotes.data
 
 import java.io.IOException
 
-class HiddenNoteException : IOException("Системные заметки скрыты")
+class HiddenNoteException : IOException("System notes are hidden")
 
 /** Trilium reserves underscore IDs for its deterministic system tree (hidden_subtree.ts).
  * Ordinary clones remain visible when any known path leaves that tree. Missing ordinary

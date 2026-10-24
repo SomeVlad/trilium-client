@@ -120,7 +120,7 @@ class HiddenNotesRepositoryTest {
         val repository = repository()
         metadata["movedNote"] = meta("movedNote", listOf("_hidden"), "Changed remote title")
         try { repository.load("movedNote"); fail("Hidden load must be denied") }
-        catch (error: HiddenNoteException) { assertEquals("Системные заметки скрыты", loadFailureMessage(error)) }
+        catch (error: HiddenNoteException) { assertEquals("Системные заметки скрыты", loadFailureMessage(context, error)) }
         assertNull(repository.cachedNote("movedNote"))
         failedHiddenBranch = true
         val listed = repository.listChildrenResult("root")

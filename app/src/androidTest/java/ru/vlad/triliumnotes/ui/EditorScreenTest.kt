@@ -91,7 +91,7 @@ class EditorScreenTest {
     @Test fun failedLocalSaveHasAnExplicitRetryAndNeverShowsADurableStatus() {
         val document = syntheticNote("<p>Unsaved draft</p>").copy(pending = true)
         val state = NotesScreenState(document = document, loading = false, localWritePending = true,
-            error = "Не удалось сохранить текст на телефоне. Не закрывайте заметку.")
+            localSaveFailed = true, error = "Не удалось сохранить текст на телефоне. Не закрывайте заметку.")
         var retries = 0
         var sends = 0
         compose.setContent {

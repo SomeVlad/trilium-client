@@ -1,5 +1,10 @@
 package ru.vlad.triliumnotes.ui
 
+import android.content.Context
+import androidx.compose.ui.platform.LocalContext
+import ru.vlad.triliumnotes.AppLanguage
+import ru.vlad.triliumnotes.R
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.heightIn
@@ -49,6 +54,7 @@ internal fun SyncStatusControl(
     viewError: String? = null,
     onOpenConflict: (() -> Unit)? = null,
 ) {
+    val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
     var showDetails by rememberSaveable { mutableStateOf(false) }
     val conflicts = sync.conflicts.size
@@ -66,15 +72,15 @@ internal fun SyncStatusControl(
         else -> Icons.Outlined.CloudDownload
     }
     val description = when {
-        conflicts > 0 -> "Конфликтов: $conflicts"
-        hasAlert -> "Ошибка синхронизации"
-        queued > 0 && sync.isSyncing -> "Отправка изменений: $queued"
-        queued > 0 -> "Не отправлено: $queued"
-        !networkAvailable -> "Нет интернета"
-        offline.isRunning && !offline.available -> initialOfflineProgressText(offline)
-        active -> "Обновление заметок"
-        offline.available -> "Доступно офлайн"
-        else -> "Офлайн-копия пока не готова"
+        conflicts > 0 -> AppLanguage.get(context, R.string.conflict_count, conflicts)
+        hasAlert -> AppLanguage.get(context, R.string.sync_error)
+        queued > 0 && sync.isSyncing -> AppLanguage.get(context, R.string.sending_count, queued)
+        queued > 0 -> AppLanguage.get(context, R.string.unsent_count, queued)
+        !networkAvailable -> AppLanguage.get(context, R.string.no_internet)
+        offline.isRunning && !offline.available -> initialOfflineProgressText(context, offline)
+        active -> AppLanguage.get(context, R.string.updating_notes)
+        offline.available -> AppLanguage.get(context, R.string.available_offline)
+        else -> AppLanguage.get(context, R.string.offline_not_ready)
     }
     val badgeCount = if (conflicts > 0) conflicts else queued
     val tint = when {
@@ -84,7 +90,7 @@ internal fun SyncStatusControl(
     }
     IconButton(onClick = { showDetails = true },
         modifier = modifier.testTag("sync-status").semantics {
-            contentDescription = "Состояние синхронизации. $description"
+            contentDescription = AppLanguage.get(context, R.string.sync_status_description, description)
         }) {
         BadgedBox(badge = {
             if (badgeCount > 0) Badge(Modifier.clearAndSetSemantics {},
@@ -103,32 +109,32 @@ internal fun SyncStatusControl(
     if (showDetails) {
         AlertDialog(onDismissRequest = { showDetails = false },
             modifier = Modifier.testTag("sync-status-dialog"),
-            title = { Text("Синхронизация") },
+            title = { Text(AppLanguage.get(context, R.string.sync)) },
             text = {
                 Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (!networkAvailable) Text("Нет подключения к интернету.")
-                    if (offline.isRunning && !offline.available) Text(initialOfflineProgressText(offline))
-                    else if (offline.isRunning) Text("Обновление офлайн-копии…")
-                    else if (offline.available) Text("Заметки доступны офлайн.")
-                    else Text("Полная офлайн-копия ещё не скачана.")
-                    if (fromCache && networkAvailable) Text("Показана сохранённая копия заметок.")
+                    if (!networkAvailable) Text(AppLanguage.get(context, R.string.no_internet_message))
+                    if (offline.isRunning && !offline.available) Text(initialOfflineProgressText(context, offline))
+                    else if (offline.isRunning) Text(AppLanguage.get(context, R.string.updating_offline))
+                    else if (offline.available) Text(AppLanguage.get(context, R.string.notes_available_offline))
+                    else Text(AppLanguage.get(context, R.string.offline_not_downloaded))
+                    if (fromCache && networkAvailable) Text(AppLanguage.get(context, R.string.showing_cached_notes))
                     if (queued > 0) {
-                        Text(if (sync.isSyncing) "Отправка изменений: $queued" else "Ожидают отправки: $queued")
-                        Text("Изменения сохранены на телефоне.")
+                        Text(if (sync.isSyncing) AppLanguage.get(context, R.string.sending_count, queued) else AppLanguage.get(context, R.string.queued_count, queued))
+                        Text(AppLanguage.get(context, R.string.changes_saved_message))
                     }
-                    if (conflicts > 0) Text("Конфликтов: $conflicts. Эти изменения не отправляются автоматически.", color = colors.error)
+                    if (conflicts > 0) Text(AppLanguage.get(context, R.string.conflict_count_message, conflicts), color = colors.error)
                     errors.forEach { Text(it, color = colors.error) }
                 }
             },
             confirmButton = {
                 if (conflicts > 0 && onOpenConflict != null) {
-                    TextButton(onClick = { showDetails = false; onOpenConflict() }) { Text("Открыть заметку") }
+                    TextButton(onClick = { showDetails = false; onOpenConflict() }) { Text(AppLanguage.get(context, R.string.open_note)) }
                 } else if (conflicts == 0) {
-                    TextButton(onClick = { showDetails = false; onRefresh() }, enabled = !active && !isViewBusy) { Text("Обновить") }
+                    TextButton(onClick = { showDetails = false; onRefresh() }, enabled = !active && !isViewBusy) { Text(AppLanguage.get(context, R.string.refresh)) }
                 }
             },
-            dismissButton = { TextButton(onClick = { showDetails = false }) { Text("Закрыть") } },
+            dismissButton = { TextButton(onClick = { showDetails = false }) { Text(AppLanguage.get(context, R.string.close)) } },
         )
     }
 }
@@ -141,15 +147,16 @@ internal fun PendingNoteStatusControl(
     onSync: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
     var showDetails by rememberSaveable { mutableStateOf(false) }
     val hasAlert = networkAvailable && sync.error != null
     val sending = networkAvailable && sync.isSyncing
     val description = when {
-        hasAlert -> "Не удалось отправить изменения"
-        sending -> "Отправка изменений"
-        !networkAvailable -> "Не отправлено. Нет интернета"
-        else -> "Изменения сохранены на телефоне"
+        hasAlert -> AppLanguage.get(context, R.string.send_failed)
+        sending -> AppLanguage.get(context, R.string.sending_changes)
+        !networkAvailable -> AppLanguage.get(context, R.string.unsent_no_internet)
+        else -> AppLanguage.get(context, R.string.changes_saved)
     }
     IconButton(onClick = { showDetails = true },
         modifier = modifier.testTag("pending-note-status").semantics { contentDescription = description }) {
@@ -161,24 +168,24 @@ internal fun PendingNoteStatusControl(
     if (showDetails) {
         AlertDialog(onDismissRequest = { showDetails = false },
             modifier = Modifier.testTag("pending-note-status-dialog"),
-            title = { Text("Изменения заметки") },
+            title = { Text(AppLanguage.get(context, R.string.note_changes)) },
             text = {
                 Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Изменения сохранены на телефоне.")
+                    Text(AppLanguage.get(context, R.string.changes_saved_message))
                     when {
-                        !networkAvailable -> Text("Ожидается подключение к интернету. Изменения отправятся автоматически.")
-                        sending -> Text("Отправка изменений…")
-                        sync.error == null -> Text("Изменения отправятся автоматически.")
+                        !networkAvailable -> Text(AppLanguage.get(context, R.string.waiting_internet))
+                        sending -> Text(AppLanguage.get(context, R.string.sending_changes_progress))
+                        sync.error == null -> Text(AppLanguage.get(context, R.string.changes_send_automatically))
                     }
                     sync.error?.let { Text(it, color = if (hasAlert) colors.error else colors.onSurfaceVariant) }
                 }
             },
             confirmButton = {
                 TextButton(onClick = { showDetails = false; onSync() },
-                    enabled = networkAvailable && !sync.isSyncing) { Text("Отправить") }
+                    enabled = networkAvailable && !sync.isSyncing) { Text(AppLanguage.get(context, R.string.send)) }
             },
-            dismissButton = { TextButton(onClick = { showDetails = false }) { Text("Закрыть") } },
+            dismissButton = { TextButton(onClick = { showDetails = false }) { Text(AppLanguage.get(context, R.string.close)) } },
         )
     }
 }
@@ -186,12 +193,13 @@ internal fun PendingNoteStatusControl(
 /** Only the first offline copy takes a temporary line in the library. */
 @Composable
 internal fun InitialOfflineProgress(offline: OfflineState, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     if (offline.isRunning && !offline.available) {
-        Text(initialOfflineProgressText(offline), modifier.testTag("offline-progress"),
+        Text(initialOfflineProgressText(context, offline), modifier.testTag("offline-progress"),
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
-private fun initialOfflineProgressText(offline: OfflineState): String =
-    if (offline.completed == offline.total) "Скачивание вложений…"
-    else "Скачивание для офлайна: ${offline.completed}/${offline.total}"
+private fun initialOfflineProgressText(context: Context, offline: OfflineState): String =
+    if (offline.completed == offline.total) AppLanguage.get(context, R.string.downloading_attachments)
+    else AppLanguage.get(context, R.string.offline_progress, offline.completed, offline.total)

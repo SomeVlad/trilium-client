@@ -102,7 +102,7 @@ class OfflineSyncTest {
 
     @After fun stop() { server.shutdown(); directory.deleteRecursively() }
     private fun ok(json: JSONObject) = MockResponse().setBody(json.toString())
-    private fun coordinator(repository: NotesRepository) = OfflineSync(repository, api, NoteResources(context, api, server.url("/").toString()))
+    private fun coordinator(repository: NotesRepository) = OfflineSync(repository, api, NoteResources(context, api, server.url("/").toString()), context)
 
     @Test fun fullCopyIncludesBodiesBinaryAndAttachmentsAndSurvivesRepositoryRestart() = runBlocking {
         val repository = NotesRepository(context, api)

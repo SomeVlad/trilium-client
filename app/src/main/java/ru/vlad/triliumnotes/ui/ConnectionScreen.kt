@@ -1,5 +1,9 @@
 package ru.vlad.triliumnotes.ui
 
+import androidx.compose.ui.platform.LocalContext
+import ru.vlad.triliumnotes.AppLanguage
+import ru.vlad.triliumnotes.R
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -8,6 +12,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.*
@@ -31,8 +37,10 @@ fun ConnectionScreen(
     storageFailed: Boolean = false,
     onResetStorage: () -> Unit = {},
     onAbout: () -> Unit = {},
+    onLanguageSelected: (String) -> Unit = {},
     onConnect: (String, String, Boolean, Boolean) -> Unit,
 ) {
+    val context = LocalContext.current
     var server by rememberSaveable { mutableStateOf("") }
     // Secrets deliberately do not enter Android's saved instance state.
     var secret by remember { mutableStateOf("") }
@@ -54,39 +62,39 @@ fun ConnectionScreen(
             .padding(horizontal = 24.dp, vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Column(Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
                 Spacer(Modifier.height(24.dp))
-                Text("Trilium Client", style = MaterialTheme.typography.headlineLarge)
+                Text(AppLanguage.get(context, R.string.app_name), style = MaterialTheme.typography.headlineLarge)
                 Spacer(Modifier.height(10.dp))
-                Text("Подключитесь к своему серверу заметок", style = MaterialTheme.typography.bodyLarge,
+                Text(AppLanguage.get(context, R.string.connect_intro), style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(32.dp))
                 OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth().testTag("connection-server"),
-                    label = { Text("Адрес сервера") }, placeholder = { Text("https://notes.example.com") },
+                    label = { Text(AppLanguage.get(context, R.string.server_address)) }, placeholder = { Text(AppLanguage.get(context, R.string.server_example)) },
                     singleLine = true, enabled = !busy && !storageFailed,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next))
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(secret, { secret = it }, Modifier.fillMaxWidth().testTag("connection-secret"),
-                    label = { Text(if (useToken) "ETAPI-токен" else "Пароль Trilium") }, singleLine = true,
+                    label = { Text(if (useToken) AppLanguage.get(context, R.string.etapi_token) else AppLanguage.get(context, R.string.trilium_password)) }, singleLine = true,
                     enabled = !busy && !storageFailed,
                     visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { submit() }),
                     trailingIcon = { IconButton(onClick = { visible = !visible }) {
                         Icon(if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                            if (visible) "Скрыть" else "Показать")
+                            if (visible) AppLanguage.get(context, R.string.hide) else AppLanguage.get(context, R.string.show))
                     } })
                 if (useToken) {
                     Spacer(Modifier.height(8.dp))
-                    Text("Создайте токен в Trilium: Настройки → ETAPI.",
+                    Text(AppLanguage.get(context, R.string.token_help),
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 TextButton(onClick = { useToken = !useToken; secret = ""; visible = false }, enabled = !busy && !storageFailed,
                     modifier = Modifier.testTag("connection-mode")) {
-                    Text(if (useToken) "Войти по паролю" else "Войти с ETAPI-токеном")
+                    Text(if (useToken) AppLanguage.get(context, R.string.use_password) else AppLanguage.get(context, R.string.use_token))
                 }
                 if (http) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(allowHttp, { allowHttp = it }, enabled = !busy)
-                        Text("Разрешить HTTP: данные передаются без шифрования", style = MaterialTheme.typography.bodyMedium)
+                        Text(AppLanguage.get(context, R.string.allow_http), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
                 error?.let {
@@ -107,12 +115,13 @@ fun ConnectionScreen(
                             color = MaterialTheme.colorScheme.onPrimaryContainer)
                         Spacer(Modifier.width(10.dp))
                     }
-                    Text(if (busy) "Подключение…" else "Подключиться")
+                    Text(if (busy) AppLanguage.get(context, R.string.connecting) else AppLanguage.get(context, R.string.connect))
                 }
                 if (storageFailed) {
-                    TextButton(onClick = onResetStorage, enabled = !busy) { Text("Сбросить подключение") }
+                    TextButton(onClick = onResetStorage, enabled = !busy) { Text(AppLanguage.get(context, R.string.reset_connection)) }
                 }
-                TextButton(onClick = onAbout) { Text("О приложении") }
+                LanguageSetting(onLanguageSelected, enabled = !busy)
+                TextButton(onClick = onAbout) { Text(AppLanguage.get(context, R.string.about)) }
             }
         }
     }
@@ -128,34 +137,67 @@ fun ConnectionSettingsScreen(
     onBack: () -> Unit,
     onDisconnect: () -> Unit,
     onAbout: () -> Unit = {},
+    onLanguageSelected: (String) -> Unit = {},
 ) {
+    val context = LocalContext.current
     var confirm by remember { mutableStateOf(false) }
     BackHandler { if (!busy) onBack() }
-    Scaffold(topBar = { TopAppBar(title = { Text("Подключение") }, navigationIcon = {
-        IconButton(onClick = onBack, enabled = !busy) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Назад") }
+    Scaffold(topBar = { TopAppBar(title = { Text(AppLanguage.get(context, R.string.connection_settings)) }, navigationIcon = {
+        IconButton(onClick = onBack, enabled = !busy) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, AppLanguage.get(context, R.string.back)) }
     }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(24.dp)) {
-            Text("Сервер Trilium", style = MaterialTheme.typography.labelLarge,
+            Text(AppLanguage.get(context, R.string.trilium_server), style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
             Text(serverUrl, style = MaterialTheme.typography.bodyLarge)
             Spacer(Modifier.height(24.dp))
-            Text("При выходе локальные заметки останутся на телефоне. Войдите на тот же сервер, чтобы продолжить работу.",
+            Text(AppLanguage.get(context, R.string.disconnect_help),
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (pendingCount > 0) {
                 Spacer(Modifier.height(12.dp))
-                Text("Не отправлено изменений: $pendingCount. Они сохранятся до следующего входа на этот сервер.",
+                Text(AppLanguage.get(context, R.string.pending_retained, pendingCount),
                     style = MaterialTheme.typography.bodyMedium)
             }
             error?.let { Spacer(Modifier.height(12.dp)); Text(it, color = MaterialTheme.colorScheme.error) }
             Spacer(Modifier.height(24.dp))
             OutlinedButton(onClick = { confirm = true }, enabled = !busy,
-                modifier = Modifier.testTag("connection-disconnect")) { Text("Выйти / сменить сервер") }
-            TextButton(onClick = onAbout) { Text("О приложении") }
+                modifier = Modifier.testTag("connection-disconnect")) { Text(AppLanguage.get(context, R.string.change_server)) }
+            LanguageSetting(onLanguageSelected, enabled = !busy)
+            TextButton(onClick = onAbout) { Text(AppLanguage.get(context, R.string.about)) }
         }
     }
-    if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text("Выйти из Trilium?") },
-        text = { Text("Синхронизация остановится. Локальные заметки и неотправленные правки сохранятся на телефоне.") },
-        confirmButton = { TextButton(onClick = { confirm = false; onDisconnect() }) { Text("Выйти") } },
-        dismissButton = { TextButton(onClick = { confirm = false }) { Text("Отмена") } })
+    if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text(AppLanguage.get(context, R.string.disconnect_title)) },
+        text = { Text(AppLanguage.get(context, R.string.disconnect_message)) },
+        confirmButton = { TextButton(onClick = { confirm = false; onDisconnect() }) { Text(AppLanguage.get(context, R.string.sign_out)) } },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Text(AppLanguage.get(context, R.string.cancel)) } })
+}
+
+/** The menu deliberately offers only the two supported languages. */
+@Composable
+private fun LanguageSetting(onSelected: (String) -> Unit, enabled: Boolean = true) {
+    val context = LocalContext.current
+    val selected = AppLanguage.language(context)
+    var expanded by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(AppLanguage.get(context, R.string.language), style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box {
+            TextButton(onClick = { expanded = true }, enabled = enabled,
+                modifier = Modifier.testTag("language-selector")) {
+                Text(AppLanguage.get(context, if (selected == "en") R.string.language_english else R.string.language_russian))
+                Spacer(Modifier.width(6.dp))
+                Icon(Icons.Outlined.ExpandMore, contentDescription = null, modifier = Modifier.size(18.dp))
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
+                modifier = Modifier.testTag("language-menu")) {
+                listOf("ru" to R.string.language_russian, "en" to R.string.language_english).forEach { (language, label) ->
+                    DropdownMenuItem(text = { Text(AppLanguage.get(context, label)) },
+                        modifier = Modifier.testTag("language-option-$language"),
+                        trailingIcon = { if (selected == language) Icon(Icons.Outlined.Check, contentDescription = null) },
+                        onClick = { expanded = false; onSelected(language) })
+                }
+            }
+        }
+    }
 }

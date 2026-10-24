@@ -1,5 +1,9 @@
 package ru.vlad.triliumnotes.ui
 
+import android.content.Context
+import ru.vlad.triliumnotes.AppLanguage
+import ru.vlad.triliumnotes.R
+
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -75,7 +79,7 @@ fun AttachmentViewer(note: NoteMeta, loader: suspend (NoteMeta) -> CachedAttachm
         try { attachment = loader(note) }
         catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (_: Exception) {
-            error = "Не удалось загрузить вложение. Проверьте подключение и повторите."
+            error = AppLanguage.get(context, R.string.attachment_download_error)
             recovery = AttachmentRecovery.DOWNLOAD
         }
     }
@@ -89,7 +93,7 @@ fun AttachmentViewer(note: NoteMeta, loader: suspend (NoteMeta) -> CachedAttachm
                 clearSaveError()
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (_: Exception) {
-                error = "Не удалось сохранить файл в выбранное место."
+                error = AppLanguage.get(context, R.string.file_save_error)
                 recovery = AttachmentRecovery.SAVE
             }
         }
@@ -99,11 +103,11 @@ fun AttachmentViewer(note: NoteMeta, loader: suspend (NoteMeta) -> CachedAttachm
         error?.let { message ->
             Text(message, Modifier.padding(horizontal = 22.dp), color = MaterialTheme.colorScheme.error)
             when (recovery) {
-                AttachmentRecovery.DOWNLOAD -> TextButton(onClick = { attempt++ }, Modifier.padding(start = 14.dp)) { Text("Повторить") }
+                AttachmentRecovery.DOWNLOAD -> TextButton(onClick = { attempt++ }, Modifier.padding(start = 14.dp)) { Text(AppLanguage.get(context, R.string.retry)) }
                 AttachmentRecovery.SAVE -> if (current != null) TextButton(onClick = {
                     clearSaveError()
                     saver.launch(current.name)
-                }, Modifier.padding(start = 14.dp)) { Text("Выбрать место") }
+                }, Modifier.padding(start = 14.dp)) { Text(AppLanguage.get(context, R.string.choose_location)) }
                 AttachmentRecovery.NONE -> Unit
             }
         }
@@ -114,24 +118,24 @@ fun AttachmentViewer(note: NoteMeta, loader: suspend (NoteMeta) -> CachedAttachm
                 TextButton(onClick = {
                     val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", current.file)
                     val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, current.mimeType).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    runCatching { context.startActivity(Intent.createChooser(intent, "Открыть файл")) }
+                    runCatching { context.startActivity(Intent.createChooser(intent, AppLanguage.get(context, R.string.open_file))) }
                         .onFailure {
-                            error = "На телефоне нет приложения для этого формата. Файл можно сохранить."
+                            error = AppLanguage.get(context, R.string.file_no_app)
                             recovery = AttachmentRecovery.NONE
                         }
-                }) { Icon(Icons.Outlined.OpenInNew, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Открыть файл") }
-                IconButton(onClick = { clearSaveError(); saver.launch(current.name) }) { Icon(Icons.Outlined.Download, "Сохранить файл") }
+                }) { Icon(Icons.Outlined.OpenInNew, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(AppLanguage.get(context, R.string.open_file)) }
+                IconButton(onClick = { clearSaveError(); saver.launch(current.name) }) { Icon(Icons.Outlined.Download, AppLanguage.get(context, R.string.save_file)) }
                 IconButton(onClick = {
                     val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", current.file)
                     val intent = Intent(Intent.ACTION_SEND).setType(current.mimeType).putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    runCatching { context.startActivity(Intent.createChooser(intent, "Поделиться файлом")) }
+                    runCatching { context.startActivity(Intent.createChooser(intent, AppLanguage.get(context, R.string.share_file))) }
                         .onFailure {
-                            error = "Не удалось открыть меню отправки файла."
+                            error = AppLanguage.get(context, R.string.file_share_error)
                             recovery = AttachmentRecovery.NONE
                         }
-                }) { Icon(Icons.Outlined.Share, "Поделиться файлом") }
+                }) { Icon(Icons.Outlined.Share, AppLanguage.get(context, R.string.share_file)) }
             }
-            Text("${attachmentFormat(current.mimeType, current.name)} · ${fileSize(current.file.length())}", Modifier.padding(horizontal = 22.dp, vertical = 4.dp),
+            Text("${attachmentFormat(context, current.mimeType, current.name)} · ${fileSize(context, current.file.length())}", Modifier.padding(horizontal = 22.dp, vertical = 4.dp),
                 style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Box(Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp)) {
                 when {
@@ -142,7 +146,7 @@ fun AttachmentViewer(note: NoteMeta, loader: suspend (NoteMeta) -> CachedAttachm
                     current.mimeType.startsWith("audio/") -> AudioAttachment(current)
                     current.mimeType.startsWith("text/") || current.mimeType in setOf("application/json", "application/xml") -> TextAttachment(current)
                     else -> Box(Modifier.fillMaxSize().padding(22.dp), contentAlignment = Alignment.Center) {
-                        Text("Файл доступен. Откройте его в подходящем приложении или сохраните на телефон.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(AppLanguage.get(context, R.string.file_available_message), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -150,7 +154,7 @@ fun AttachmentViewer(note: NoteMeta, loader: suspend (NoteMeta) -> CachedAttachm
     }
 }
 
-internal fun attachmentFormat(mime: String, name: String): String {
+internal fun attachmentFormat(context: Context, mime: String, name: String): String {
     val normalized = mime.substringBefore(';').trim().lowercase(java.util.Locale.ROOT)
     val extension = name.substringAfterLast('/').substringAfterLast('.', "")
         .takeIf { it.matches(Regex("[a-zA-Z0-9]{1,8}")) }?.uppercase(java.util.Locale.ROOT)
@@ -169,23 +173,24 @@ internal fun attachmentFormat(mime: String, name: String): String {
         "application/json" -> "JSON"
         "application/xml" -> "XML"
         else -> when {
-            normalized.startsWith("text/") -> "Текст"
-            normalized.startsWith("audio/") -> "Аудио"
-            normalized.startsWith("video/") -> "Видео"
-            normalized.startsWith("image/") -> extension ?: "Изображение"
-            else -> extension ?: "Файл"
+            normalized.startsWith("text/") -> AppLanguage.get(context, R.string.format_text)
+            normalized.startsWith("audio/") -> AppLanguage.get(context, R.string.format_audio)
+            normalized.startsWith("video/") -> AppLanguage.get(context, R.string.format_video)
+            normalized.startsWith("image/") -> extension ?: AppLanguage.get(context, R.string.format_image)
+            else -> extension ?: AppLanguage.get(context, R.string.format_file)
         }
     }
 }
 
-private fun fileSize(size: Long): String = when {
-    size < 1024 -> "$size Б"
-    size < 1024 * 1024 -> "${size / 1024} КБ"
-    else -> String.format(java.util.Locale.ROOT, "%.1f МБ", size / 1048576.0)
+private fun fileSize(context: Context, size: Long): String = when {
+    size < 1024 -> AppLanguage.get(context, R.string.file_size_bytes, size)
+    size < 1024 * 1024 -> AppLanguage.get(context, R.string.file_size_kb, size / 1024)
+    else -> AppLanguage.get(context, R.string.file_size_mb, size / 1048576.0)
 }
 
 @Composable
 private fun ImageAttachment(attachment: CachedAttachment) {
+    val context = LocalContext.current
     var scale by remember(attachment.file) { mutableFloatStateOf(1f) }
     var pan by remember(attachment.file) { mutableStateOf(Offset.Zero) }
     var size by remember { mutableStateOf(IntSize.Zero) }
@@ -224,13 +229,14 @@ private fun ImageAttachment(attachment: CachedAttachment) {
                 }
             }, onRelease = { view -> (view.drawable as? AnimatedImageDrawable)?.stop(); view.setImageDrawable(null) })
         if (drawable == null && !failed) CircularProgressIndicator(Modifier.align(Alignment.Center))
-        if (failed) Text("Не удалось показать изображение. Попробуйте открыть файл в другом приложении.", Modifier.padding(22.dp))
-        if (scale > 1f) TextButton(onClick = { scale = 1f; pan = Offset.Zero }, Modifier.align(Alignment.BottomEnd).padding(12.dp)) { Text("Сбросить масштаб") }
+        if (failed) Text(AppLanguage.get(context, R.string.image_display_error), Modifier.padding(22.dp))
+        if (scale > 1f) TextButton(onClick = { scale = 1f; pan = Offset.Zero }, Modifier.align(Alignment.BottomEnd).padding(12.dp)) { Text(AppLanguage.get(context, R.string.reset_zoom)) }
     }
 }
 
 @Composable
 private fun PdfAttachment(attachment: CachedAttachment) {
+    val context = LocalContext.current
     val renderer = remember(attachment.file) {
         runCatching {
             val descriptor = ParcelFileDescriptor.open(attachment.file, ParcelFileDescriptor.MODE_READ_ONLY)
@@ -239,7 +245,7 @@ private fun PdfAttachment(attachment: CachedAttachment) {
     }
     var closed by remember(renderer) { mutableStateOf(false) }
     if (renderer == null) {
-        Text("Не удалось открыть PDF. Попробуйте «Открыть файл».", Modifier.padding(22.dp))
+        Text(AppLanguage.get(context, R.string.pdf_open_error), Modifier.padding(22.dp))
         return
     }
     DisposableEffect(renderer) { onDispose { synchronized(renderer) { closed = true; renderer.close() } } }
@@ -266,8 +272,8 @@ private fun PdfAttachment(attachment: CachedAttachment) {
                     pageFailed = result.isFailure
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    bitmap?.let { Image(it.asImageBitmap(), "Страница ${index + 1}", Modifier.fillMaxWidth().testTag("pdf-page-$index")) }
-                        ?: if (pageFailed) Text("Не удалось показать страницу. Файл можно открыть отдельно.", Modifier.padding(16.dp))
+                    bitmap?.let { Image(it.asImageBitmap(), AppLanguage.get(context, R.string.pdf_page, index + 1), Modifier.fillMaxWidth().testTag("pdf-page-$index")) }
+                        ?: if (pageFailed) Text(AppLanguage.get(context, R.string.pdf_page_error), Modifier.padding(16.dp))
                         else CircularProgressIndicator(Modifier.padding(24.dp).size(24.dp))
                     Text("${index + 1} / ${renderer.pageCount}", style = MaterialTheme.typography.labelSmall)
                 }
@@ -359,7 +365,7 @@ private fun AudioAttachment(attachment: CachedAttachment) {
     Column(Modifier.fillMaxWidth().padding(22.dp).testTag("audio-player"),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (failed) {
-            Text("Не удалось воспроизвести файл. Попробуйте открыть его в другом приложении.",
+            Text(AppLanguage.get(context, R.string.media_play_error),
                 color = MaterialTheme.colorScheme.error)
         } else {
             FilledTonalButton(enabled = prepared, modifier = Modifier.testTag("audio-play"), onClick = {
@@ -380,9 +386,9 @@ private fun AudioAttachment(attachment: CachedAttachment) {
             }) {
                 Icon(if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, null)
                 Spacer(Modifier.width(8.dp))
-                Text(if (playing) "Пауза" else "Воспроизвести")
+                Text(if (playing) AppLanguage.get(context, R.string.pause) else AppLanguage.get(context, R.string.play))
             }
-            if (!prepared) Text("Подготовка аудио…", style = MaterialTheme.typography.bodyMedium,
+            if (!prepared) Text(AppLanguage.get(context, R.string.audio_preparing), style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -390,11 +396,12 @@ private fun AudioAttachment(attachment: CachedAttachment) {
 
 @Composable
 private fun MediaAttachment(attachment: CachedAttachment) {
+    val context = LocalContext.current
     var player by remember { mutableStateOf<VideoView?>(null) }
     var failed by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(false) }
     if (failed) {
-        Text("Не удалось воспроизвести файл. Попробуйте открыть его в другом приложении.", Modifier.padding(22.dp))
+        Text(AppLanguage.get(context, R.string.media_play_error), Modifier.padding(22.dp))
     } else Column(Modifier.fillMaxSize()) {
         AndroidView(factory = { ctx ->
             VideoView(ctx).apply {
@@ -411,7 +418,7 @@ private fun MediaAttachment(attachment: CachedAttachment) {
             FilledTonalButton(enabled = !failed, onClick = {
                 if (playing) player?.pause() else player?.start()
                 playing = !playing
-            }) { Icon(if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, null); Text(if (playing) "Пауза" else "Воспроизвести") }
+            }) { Icon(if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, null); Text(if (playing) AppLanguage.get(context, R.string.pause) else AppLanguage.get(context, R.string.play)) }
         }
     }
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
@@ -426,6 +433,7 @@ private fun MediaAttachment(attachment: CachedAttachment) {
 
 @Composable
 private fun TextAttachment(attachment: CachedAttachment) {
+    val context = LocalContext.current
     var text by remember(attachment.file) { mutableStateOf("") }
     var truncated by remember(attachment.file) { mutableStateOf(false) }
     var failed by remember(attachment.file) { mutableStateOf(false) }
@@ -450,8 +458,8 @@ private fun TextAttachment(attachment: CachedAttachment) {
         text = loaded.take(1_048_576)
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(22.dp)) {
-        if (failed) Text("Не удалось прочитать файл. Повторите загрузку вложения.", color = MaterialTheme.colorScheme.error)
-        if (truncated) Text("Показано начало большого файла. Полный файл доступен через «Открыть файл» и «Сохранить файл».",
+        if (failed) Text(AppLanguage.get(context, R.string.file_read_error), color = MaterialTheme.colorScheme.error)
+        if (truncated) Text(AppLanguage.get(context, R.string.file_truncated_message),
             Modifier.padding(bottom = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(text, fontFamily = FontFamily.Monospace)
     }

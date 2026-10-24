@@ -1,5 +1,8 @@
 package ru.vlad.triliumnotes.data
 
+import ru.vlad.triliumnotes.AppLanguage
+import ru.vlad.triliumnotes.R
+import android.content.Context
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,7 +24,9 @@ class OfflineSync(
     private val repository: NotesRepository,
     private val api: TriliumApi,
     private val resources: NoteResources,
+    private val context: Context,
 ) {
+    private fun text(id: Int) = AppLanguage.get(context, id)
     private val mutex = Mutex()
     private val mutable = MutableStateFlow(OfflineState(available = repository.offlineCopyAvailable))
     val state = mutable.asStateFlow()
@@ -43,7 +48,7 @@ class OfflineSync(
                     val tree = repository.listChildrenResult(id)
                     if (tree.fromCache) {
                         mutable.value = mutable.value.copy(isRunning = false, complete = false,
-                            error = "Нет связи с Trilium. Сохранённые заметки доступны офлайн.")
+                            error = text(R.string.msg_offline_disconnected))
                         return state.value
                     }
                     if (tree.failedBranchIds.isNotEmpty()) failures++
@@ -53,7 +58,7 @@ class OfflineSync(
                     }
                     mutable.value = mutable.value.copy(total = discovered.size)
                     val document = repository.prefetch(note)
-                        ?: throw IOException("Открываемая заметка ещё не сохранена для офлайн-доступа")
+                        ?: throw IOException("This note has not been saved for offline access yet")
                     if (!note.isProtected) {
                         if (note.type in setOf("image", "file") || !note.hasTextContent) {
                             resources.prefetchNote(note)
@@ -90,14 +95,14 @@ class OfflineSync(
             }
             if (failures == 0) repository.markOfflineCopyAvailable()
             mutable.value = mutable.value.copy(isRunning = false, complete = failures == 0, available = repository.offlineCopyAvailable,
-                error = if (failures == 0) null else "Офлайн-копия обновлена не полностью. Повторим при подключении к интернету.")
+                error = if (failures == 0) null else text(R.string.msg_offline_partial))
             return state.value
         } catch (cancelled: CancellationException) {
             mutable.value = mutable.value.copy(isRunning = false, complete = false)
             throw cancelled
         } catch (_: Exception) {
             mutable.value = mutable.value.copy(isRunning = false, complete = false,
-                error = "Не удалось обновить офлайн-копию. Повторим при подключении к интернету.")
+                error = text(R.string.msg_offline_failed))
             return state.value
         } finally {
             mutex.unlock()

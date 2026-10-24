@@ -1,5 +1,7 @@
 package ru.vlad.triliumnotes.data
 
+import ru.vlad.triliumnotes.AppLanguage
+import ru.vlad.triliumnotes.R
 import android.content.Context
 import android.util.AtomicFile
 import kotlinx.coroutines.CancellationException
@@ -26,7 +28,8 @@ data class SyncState(
 
 data class SearchResult(val notes: List<NoteMeta>, val fromCache: Boolean = false)
 
-class NotesRepository(context: Context, private val api: TriliumApi) {
+class NotesRepository(private val context: Context, private val api: TriliumApi) {
+    private fun text(id: Int, vararg args: Any) = AppLanguage.get(context, id, *args)
     private val file = AtomicFile(File(context.filesDir, "trilium-cache.json"))
     private val offlineMarker = File(context.filesDir, "offline-copy-complete")
     val offlineCopyAvailable: Boolean get() = cacheError == null && file.baseFile.isFile && offlineMarker.isFile
@@ -48,7 +51,7 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
     private val syncMutex = Mutex()
 
     private val cacheRead = runCatching { readStore() }
-    private val cacheError = if (cacheRead.isFailure) "Локальный кэш заметок повреждён. Запись остановлена, чтобы сохранить файл." else null
+    private val cacheError = if (cacheRead.isFailure) text(R.string.msg_cache_damaged) else null
     @Volatile private var store: Store = cacheRead.getOrDefault(Store())
     @Volatile private var activeDocumentId: String? = null
     fun pinDocument(noteId: String?) { activeDocumentId = noteId }
@@ -227,12 +230,12 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
     /** Returns only after the complete draft and outbox entry are on disk. */
     suspend fun saveDraft(noteId: String, title: String, html: String): NoteDocument {
         change { next ->
-            require(noteId !in deletionClosure(next)) { "Заметка удалена" }
-            val stored = next.notes[noteId] ?: error("Сначала откройте заметку")
+            require(noteId !in deletionClosure(next)) { "Note is deleted" }
+            val stored = next.notes[noteId] ?: error("Open the note first")
             require(stored.meta.isEditable) {
-                "Эту заметку нельзя редактировать"
+                "This note cannot be edited"
             }
-            require(stored.html != null) { "Сначала загрузите содержимое заметки" }
+            require(stored.html != null) { "Load the note content first" }
             val old = next.pending[noteId]
             next.counter++
             next.pending[noteId] = Pending(
@@ -262,7 +265,7 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
 
     /** A native book remains a navigable folder even before it has any children. */
     suspend fun createFolder(parentId: String, title: String): NoteDocument {
-        require(title.isNotBlank()) { "Введите название папки" }
+        require(title.isNotBlank()) { "Enter a folder name" }
         return stageCreate(parentId, title.trim(), "", "book", "text/html")
     }
 
@@ -271,7 +274,7 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
         val noteId = newId()
         val branchId = newId()
         change { next ->
-            require(parentId !in deletionClosure(next)) { "Родительская заметка удалена" }
+            require(parentId !in deletionClosure(next)) { "Parent note is deleted" }
             next.counter++
             val meta = NoteMeta(noteId, title, type, mime, false,
                 null, null, emptyList(), listOf(parentId))
@@ -287,8 +290,8 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
     suspend fun delete(noteId: String) {
         change { next ->
             if (noteId in next.deleted) return@change
-            val meta = next.notes[noteId]?.meta ?: error("Сначала откройте заметку")
-            require(meta.canDelete && !visibility(next).isHidden(noteId)) { "Эту заметку нельзя удалить" }
+            val meta = next.notes[noteId]?.meta ?: error("Open the note first")
+            require(meta.canDelete && !visibility(next).isHidden(noteId)) { "This note cannot be deleted" }
             val previous = next.pending[noteId]
             next.deleted += noteId
             // Only the explicitly deleted note is final. A cached descendant may
@@ -325,7 +328,7 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
                 } catch (error: Exception) {
                     if (error is CancellationException) throw error
                     lastError = if (pending.kind == "delete")
-                        "Не удалось удалить заметку. ${safeMessage(error)}" else safeMessage(error)
+                        text(R.string.msg_delete_failed, safeMessage(error)) else safeMessage(error)
                 }
             }
         } finally {
@@ -340,13 +343,13 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
         val branchId = newId()
         change { next ->
             val pending = next.pending[noteId]
-                ?: error("Нет ожидающей правки")
-            require(pending.conflict) { "Конфликт не обнаружен" }
+                ?: error("No pending edit")
+            require(pending.conflict) { "No conflict found" }
             val parentId = if (pending.remoteMissing) "root" else
-                pending.parentId ?: error("Неизвестна родительская заметка")
-            require(noteId !in deletionClosure(next) && parentId !in deletionClosure(next)) { "Заметка удалена" }
+                pending.parentId ?: error("Unknown parent note")
+            require(noteId !in deletionClosure(next) && parentId !in deletionClosure(next)) { "Note is deleted" }
             next.counter++
-            val copyTitle = pending.title + " (копия конфликта)"
+            val copyTitle = text(R.string.msg_conflict_copy_title, pending.title)
             val meta = NoteMeta(copyId, copyTitle, pending.noteType, pending.noteMime, false,
                 null, null, emptyList(), listOf(parentId))
             next.notes[copyId] = StoredNote(meta, "")
@@ -654,15 +657,15 @@ class NotesRepository(context: Context, private val api: TriliumApi) {
         IOException(safeMessage(error), error)
 
     private fun safeMessage(error: Exception): String = when (error) {
-        is HiddenNoteException -> error.message!!
-        is UnexpectedHtmlResponseException -> loadFailureMessage(error)
+        is HiddenNoteException -> text(R.string.msg_hidden_notes)
+        is UnexpectedHtmlResponseException -> loadFailureMessage(context, error)
         is ApiException -> when (error.status) {
-            401, 403 -> "Нет доступа к Trilium"
-            404 -> "Заметка не найдена"
-            else -> "Сервер Trilium ответил с ошибкой ${error.status}"
+            401, 403 -> text(R.string.msg_sync_forbidden)
+            404 -> text(R.string.msg_sync_missing)
+            else -> text(R.string.msg_sync_http, error.status)
         }
-        is IOException -> "Нет связи с сервером Trilium"
-        else -> "Не удалось обработать ответ Trilium"
+        is IOException -> text(R.string.msg_sync_offline)
+        else -> text(R.string.msg_sync_response)
     }
 }
 

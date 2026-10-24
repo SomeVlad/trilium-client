@@ -148,13 +148,18 @@ class AttachmentViewerTest {
     }
 
     @Test fun attachmentFormatsUseHumanLabelsAndSafeExtensions() {
-        assertEquals("PDF", attachmentFormat("application/pdf", "document"))
-        assertEquals("PNG", attachmentFormat(" IMAGE/PNG ; charset=binary", "image"))
-        assertEquals("Текст", attachmentFormat("text/plain; charset=utf-8", "readme.txt"))
-        assertEquals("Аудио", attachmentFormat("audio/wav", "sample.wav"))
-        assertEquals("Видео", attachmentFormat("video/mp4", "clip.mp4"))
-        assertEquals("DOCX", attachmentFormat("application/octet-stream", "sample.docx"))
-        assertEquals("Файл", attachmentFormat("application/unknown", "no extension"))
+        val source = InstrumentationRegistry.getInstrumentation().targetContext
+        val configuration = android.content.res.Configuration(source.resources.configuration).apply {
+            setLocales(android.os.LocaleList(java.util.Locale.forLanguageTag("ru")))
+        }
+        val context = source.createConfigurationContext(configuration)
+        assertEquals("PDF", attachmentFormat(context, "application/pdf", "document"))
+        assertEquals("PNG", attachmentFormat(context, " IMAGE/PNG ; charset=binary", "image"))
+        assertEquals("Текст", attachmentFormat(context, "text/plain; charset=utf-8", "readme.txt"))
+        assertEquals("Аудио", attachmentFormat(context, "audio/wav", "sample.wav"))
+        assertEquals("Видео", attachmentFormat(context, "video/mp4", "clip.mp4"))
+        assertEquals("DOCX", attachmentFormat(context, "application/octet-stream", "sample.docx"))
+        assertEquals("Файл", attachmentFormat(context, "application/unknown", "no extension"))
     }
 
     @Test fun audioUsesCompactNativeControlsAndPausesWithItsLifecycle() {

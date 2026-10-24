@@ -1,5 +1,6 @@
 package ru.vlad.triliumnotes.data
 
+import ru.vlad.triliumnotes.R
 import android.content.Context
 import android.content.ContextWrapper
 import kotlinx.coroutines.Dispatchers
@@ -10,7 +11,7 @@ import android.util.AtomicFile
 import org.json.JSONObject
 import java.util.UUID
 
-class LegacyImportException(message: String) : IOException(message)
+class LegacyImportException(val messageId: Int, vararg val arguments: Any) : IOException("Legacy import failed")
 
 /** Immutable services and a separate cache namespace for the active Trilium server. */
 class NotesServices internal constructor(
@@ -21,7 +22,7 @@ class NotesServices internal constructor(
 ) {
     val repository = NotesRepository(context, api)
     val resources = NoteResources(context, api, serverUrl)
-    val offline = OfflineSync(repository, api, resources)
+    val offline = OfflineSync(repository, api, resources, context)
 
     companion object {
         @Volatile private var instance: NotesServices? = null
@@ -67,25 +68,25 @@ class NotesServices internal constructor(
             synchronized(this@Companion) {
                 val app = context.applicationContext
                 if (instance?.serverUrl == session.serverUrl)
-                    throw LegacyImportException("Сначала выйдите из сервера, чтобы перенести старую локальную копию")
+                    throw LegacyImportException(R.string.msg_legacy_sign_out)
                 importLegacyFiles(app, session)
                 activateLocked(app, session)
             }
         }
 
         internal fun importLegacyFiles(app: Context, session: TriliumSession) {
-            if (!legacyImportAvailable(app)) throw LegacyImportException("Старый локальный кэш уже перенесён или отсутствует")
-            if (legacyPendingCount(app) == null) throw LegacyImportException("Старый локальный кэш повреждён; исходные файлы сохранены")
+            if (!legacyImportAvailable(app)) throw LegacyImportException(R.string.msg_legacy_missing)
+            if (legacyPendingCount(app) == null) throw LegacyImportException(R.string.msg_legacy_corrupt)
             val account = accountContext(app, session.accountId).filesDir
             val cache = File(account, "trilium-cache.json")
             if (cache.isFile || File(cache.path + ".bak").isFile) {
                 val pending = runCatching {
                     JSONObject(AtomicFile(cache).readFully().toString(Charsets.UTF_8)).optJSONObject("pending")?.length() ?: 0
                 }.getOrElse {
-                    throw LegacyImportException("Локальный кэш этого сервера повреждён. Перенос остановлен; все исходные файлы сохранены.")
+                    throw LegacyImportException(R.string.msg_legacy_current_corrupt)
                 }
                 if (pending > 0)
-                    throw LegacyImportException("У этого сервера есть неотправленные изменения ($pending). Сначала отправьте их или сохраните отдельно; старые файлы сохранены.")
+                    throw LegacyImportException(R.string.msg_legacy_pending, pending)
             }
             val stage = File(account.parentFile, ".legacy-${UUID.randomUUID()}")
             try {
@@ -95,16 +96,16 @@ class NotesServices internal constructor(
                 listOf("offline-copy-complete", "note-resources").forEach { name ->
                     val original = File(app.filesDir, name)
                     if (original.exists() && !original.copyRecursively(File(stage, name)))
-                        throw LegacyImportException("Не удалось скопировать старый кэш")
+                        throw LegacyImportException(R.string.msg_legacy_copy_failed)
                 }
                 val retained = File(account.parentFile, "${session.accountId}-retained-${UUID.randomUUID()}")
                 val hasFiles = account.walkTopDown().any { it.isFile }
                 if (hasFiles && !account.renameTo(retained))
-                    throw LegacyImportException("Не удалось сохранить текущую локальную копию; перенос остановлен")
+                    throw LegacyImportException(R.string.msg_legacy_retain_failed)
                 if (!hasFiles) account.deleteRecursively()
                 if (!stage.renameTo(account)) {
                     if (hasFiles) retained.renameTo(account)
-                    throw LegacyImportException("Не удалось подключить старый кэш; исходные файлы сохранены")
+                    throw LegacyImportException(R.string.msg_legacy_attach_failed)
                 }
                 // This contains only an account hash. All original files remain available for recovery.
                 val marker = AtomicFile(File(app.filesDir, "legacy-imported"))

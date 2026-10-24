@@ -20,9 +20,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.vlad.triliumnotes.AppLanguage
+import ru.vlad.triliumnotes.R
 
 /** Code retains its source; Markdown uses the visual editor with Markdown input and output. */
 @Composable
@@ -42,6 +47,9 @@ fun SourceNoteEditor(
     resourceLoader: (String) -> EditorResource? = { null },
     serverUrl: String = "",
 ) {
+    val context = LocalContext.current
+    val titleDescription = AppLanguage.get(context, R.string.editor_note_title)
+    val sourceDescription = AppLanguage.get(context, R.string.editor_source_text)
     key(noteKey) {
         var content by remember { mutableStateOf(initialContent) }
         var localTitle by remember { mutableStateOf(title) }
@@ -65,12 +73,14 @@ fun SourceNoteEditor(
                     value = localTitle, onValueChange = { localTitle = it; onTitleChanged(it) },
                     readOnly = !editable, textStyle = MaterialTheme.typography.headlineLarge.copy(color = style.color),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 22.dp).testTag("note-title"),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 22.dp).testTag("note-title")
+                        .semantics { contentDescription = titleDescription },
                 )
                 if (editable) BasicTextField(
                     value = content, onValueChange = { content = it; onContentChanged(it) },
                     textStyle = style, cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.fillMaxWidth().testTag("source-editor"),
+                    modifier = Modifier.fillMaxWidth().testTag("source-editor")
+                        .semantics { contentDescription = sourceDescription },
                 ) else SelectionContainer { Text(content, style = style, modifier = Modifier.fillMaxWidth()) }
             }
         }

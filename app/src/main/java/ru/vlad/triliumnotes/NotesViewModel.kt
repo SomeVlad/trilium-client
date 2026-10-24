@@ -26,11 +26,9 @@ import ru.vlad.triliumnotes.data.CachedAttachment
 import ru.vlad.triliumnotes.data.NotesServices
 import ru.vlad.triliumnotes.data.NotesSyncScheduler
 
-internal const val LOCAL_SAVE_ERROR = "Не удалось сохранить текст на телефоне. Не закрывайте заметку."
-
 data class Folder(val id: String, val title: String)
 data class NotesScreenState(
-    val folders: List<Folder> = listOf(Folder("root", "Заметки")),
+    val folders: List<Folder> = listOf(Folder("root", "")),
     val items: List<TreeItem> = emptyList(),
     val query: String = "",
     val results: List<NoteMeta> = emptyList(),
@@ -39,6 +37,7 @@ data class NotesScreenState(
     val searching: Boolean = false,
     val error: String? = null,
     val localWritePending: Boolean = false,
+    val localSaveFailed: Boolean = false,
     val newNoteId: String? = null,
     val newNoteTitleUntouched: Boolean = false,
     val currentFolderNote: NoteMeta? = null,
@@ -52,6 +51,7 @@ data class NotesScreenState(
 class NotesViewModel(application: Application,
     private val services: NotesServices = NotesServices.get(application),
 ) : AndroidViewModel(application) {
+    private fun text(id: Int) = AppLanguage.get(getApplication(), id)
     val serverUrl = services.serverUrl
     private val repository = services.repository
     private val resources = services.resources
@@ -82,7 +82,7 @@ class NotesViewModel(application: Application,
                     repository.saveDraft(draft.id, draft.title, draft.html)
                     mutable.update {
                         if (editVersion == draft.version && it.document?.note?.id == draft.id)
-                            it.copy(localWritePending = false, error = it.error.takeUnless { message -> message == LOCAL_SAVE_ERROR })
+                            it.copy(localWritePending = false, localSaveFailed = false, error = it.error.takeUnless { _ -> it.localSaveFailed })
                         else it
                     }
                     scheduleSync()
@@ -90,7 +90,7 @@ class NotesViewModel(application: Application,
                 } catch (error: Exception) {
                     if (error is CancellationException) throw error
                     mutable.update {
-                        if (editVersion == draft.version && it.document?.note?.id == draft.id) it.copy(error = LOCAL_SAVE_ERROR)
+                        if (editVersion == draft.version && it.document?.note?.id == draft.id) it.copy(error = text(R.string.msg_local_save_failed), localSaveFailed = true)
                         else it
                     }
                 }
@@ -158,7 +158,7 @@ class NotesViewModel(application: Application,
                 if (mutable.value.folders.last().id == folder.id) mutable.update {
                     it.copy(items = result.items, loading = false, currentFolderNote = result.parent, currentFolderHasContent = hasContent, fromCache = result.fromCache,
                         error = if (result.failedBranchIds.isEmpty()) null else
-                            "Не удалось обновить часть списка. Уже загруженные заметки доступны.")
+                            text(R.string.msg_list_partial))
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -169,7 +169,7 @@ class NotesViewModel(application: Application,
                     return@launch
                 }
                 if (mutable.value.folders.last().id == folder.id) {
-                    mutable.update { it.copy(loading = false, error = loadFailureMessage(error)) }
+                    mutable.update { it.copy(loading = false, error = loadFailureMessage(getApplication(), error)) }
                 }
             }
         }
@@ -244,7 +244,7 @@ class NotesViewModel(application: Application,
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (mutable.value.query == query) mutable.update { it.copy(searching = false, error = "Поиск сейчас недоступен. Проверьте подключение.") }
+                if (mutable.value.query == query) mutable.update { it.copy(searching = false, error = text(R.string.msg_search_unavailable)) }
             }
         }
     }
@@ -281,7 +281,7 @@ class NotesViewModel(application: Application,
                     if (previous != null) noteHistory.removeAt(noteHistory.lastIndex)
                     repository.pinDocument(previous?.note?.id)
                     mutable.update { it.copy(document = previous, loading = false, openingNoteId = null,
-                        error = loadFailureMessage(error)) }
+                        error = loadFailureMessage(getApplication(), error)) }
                 }
             }
         }
@@ -290,7 +290,7 @@ class NotesViewModel(application: Application,
     fun openById(noteId: String) {
         if (mutable.value.localWritePending || mutable.value.deletingNoteId != null || noteId == mutable.value.document?.note?.id || repository.isHidden(noteId)) return
         if (!noteId.matches(Regex("[A-Za-z0-9_]{4,32}"))) {
-            mutable.update { it.copy(error = "Не удалось распознать ссылку на заметку") }
+            mutable.update { it.copy(error = text(R.string.msg_note_link_invalid)) }
             return
         }
         val current = mutable.value.document?.note
@@ -318,7 +318,7 @@ class NotesViewModel(application: Application,
                 NotesSyncScheduler.schedulePending(getApplication())
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                mutable.update { it.copy(loading = false, error = "Не удалось создать заметку на телефоне.") }
+                mutable.update { it.copy(loading = false, error = text(R.string.msg_create_note_failed)) }
             }
         }
     }
@@ -344,7 +344,7 @@ class NotesViewModel(application: Application,
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (request == navigationVersion) mutable.update {
-                    it.copy(loading = false, error = "Не удалось создать папку на телефоне.")
+                    it.copy(loading = false, error = text(R.string.msg_create_folder_failed))
                 }
             }
         }
@@ -365,13 +365,13 @@ class NotesViewModel(application: Application,
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 mutable.update { it.copy(deletingNoteId = null, loading = false, searching = false,
-                    error = "Не удалось сохранить удаление на телефоне. Заметка оставлена без изменений. Попробуйте ещё раз.") }
+                    error = text(R.string.msg_delete_local_failed)) }
                 return@launch
             }
             noteHistory.removeAll { repository.isDeleted(it.id) }
             val current = mutable.value
             val folders = current.folders.takeWhile { !repository.isDeleted(it.id) }
-                .ifEmpty { listOf(Folder("root", "Заметки")) }
+                .ifEmpty { listOf(Folder("root", "")) }
             val folderChanged = folders != current.folders
             val document = current.document?.takeUnless { repository.isDeleted(it.note.id) }
             val folderId = folders.last().id
@@ -411,9 +411,9 @@ class NotesViewModel(application: Application,
     fun retryLocalSave() {
         val current = mutable.value
         val document = current.document ?: return
-        if (!document.note.isEditable || !current.localWritePending || current.error != LOCAL_SAVE_ERROR) return
+        if (!document.note.isEditable || !current.localWritePending || !current.localSaveFailed) return
         val version = ++editVersion
-        mutable.update { it.copy(error = null) }
+        mutable.update { it.copy(error = null, localSaveFailed = false) }
         writes.trySend(Draft(document.note.id, document.note.title, document.html, version))
     }
 
@@ -424,7 +424,7 @@ class NotesViewModel(application: Application,
         val changed = before.copy(note = before.note.copy(title = title ?: before.note.title), html = html ?: before.html, pending = true)
         if (changed.note.title == before.note.title && changed.html == before.html) return
         val version = ++editVersion
-        mutable.update { it.copy(document = changed, localWritePending = true, error = null) }
+        mutable.update { it.copy(document = changed, localWritePending = true, localSaveFailed = false, error = null) }
         writes.trySend(Draft(changed.note.id, changed.note.title, changed.html, version))
     }
 
@@ -519,7 +519,7 @@ class NotesViewModel(application: Application,
                 syncNow()
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                mutable.update { it.copy(error = "Копия пока не сохранена. Ваш текст остаётся на телефоне.") }
+                mutable.update { it.copy(error = text(R.string.msg_conflict_copy_failed)) }
             }
         }
     }

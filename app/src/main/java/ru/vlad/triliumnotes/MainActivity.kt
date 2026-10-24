@@ -1,5 +1,7 @@
 package ru.vlad.triliumnotes
 
+import android.content.Context
+import androidx.compose.ui.platform.LocalContext
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -53,10 +55,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLanguage.context(newBase))
+    }
+
+    private fun selectLanguage(language: String) {
+        val previous = AppLanguage.language(this)
+        // Persist even when the automatic default already matches the explicit choice.
+        AppLanguage.select(this, language)
+        connection.refreshLanguage()
+        if (previous != language) recreate()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
+            val context = LocalContext.current
             NotesTheme {
                 val state by connection.state.collectAsStateWithLifecycle()
                 val services = state.services
@@ -65,7 +80,7 @@ class MainActivity : ComponentActivity() {
                     state.restoring -> Surface { Box(Modifier.fillMaxSize()) }
                     services == null -> ConnectionScreen(state.busy, state.error, state.storageFailed,
                         onResetStorage = connection::disconnect, onConnect = connection::connect,
-                        onAbout = { about = true })
+                        onAbout = { about = true }, onLanguageSelected = ::selectLanguage)
                     else -> key(services) {
                         val notes = remember { connection.notesModel(services) }
                         var settings by rememberSaveable { mutableStateOf(false) }
@@ -77,7 +92,7 @@ class MainActivity : ComponentActivity() {
                         }
                         if (settings) ConnectionSettingsScreen(services.serverUrl, sync.pendingCount,
                             state.busy, state.error, onBack = { settings = false }, onDisconnect = connection::disconnect,
-                            onAbout = { about = true })
+                            onAbout = { about = true }, onLanguageSelected = ::selectLanguage)
                         else NotesApp(notes, onConnectionSettings = { settings = true })
                     }
                 }
@@ -96,17 +111,15 @@ class MainActivity : ComponentActivity() {
                     LegalScreen(onBack = { about = false })
                 }
                 state.legacySession?.let { session ->
-                    AlertDialog(onDismissRequest = {}, title = { Text("Заметки прежней версии") },
-                        text = { Text("На телефоне найдена прежняя локальная копия" +
-                            (state.legacyPendingCount?.let { ". Не отправлено изменений: $it." } ?: ".") +
-                            " Это данные сервера ${session.serverUrl}? Перенос разрешит их синхронизацию." +
-                            " Уже загруженная копия этого сервера будет заменена, если в ней нет неотправленных правок." +
+                    AlertDialog(onDismissRequest = {}, title = { Text(AppLanguage.get(context, R.string.legacy_title)) },
+                        text = { Text(AppLanguage.get(context, R.string.legacy_message, session.serverUrl) +
+                            (state.legacyPendingCount?.let { "\n\n" + AppLanguage.get(context, R.string.legacy_pending, it) } ?: "") +
                             (state.error?.let { "\n\n$it" } ?: "")) },
                         confirmButton = { TextButton(onClick = { connection.finishLegacyImport(true) }, enabled = !state.busy) {
-                            Text("Это мой прежний сервер")
+                            Text(AppLanguage.get(context, R.string.legacy_confirm))
                         } },
                         dismissButton = { TextButton(onClick = { connection.finishLegacyImport(false) }, enabled = !state.busy) {
-                            Text("Не переносить")
+                            Text(AppLanguage.get(context, R.string.legacy_skip))
                         } })
                 }
             }

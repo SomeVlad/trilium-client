@@ -37,6 +37,23 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private val notesOwner = object : ViewModelStoreOwner { override val viewModelStore = notesStore }
     private var notesServices: NotesServices? = null
     private var notes: NotesViewModel? = null
+    private var lastFailure: Throwable? = null
+    private var failedLegacyImport = false
+
+    private fun failureMessage(error: Throwable, legacyImport: Boolean = false): String {
+        lastFailure = error
+        failedLegacyImport = legacyImport
+        return if (legacyImport && error !is LegacyImportException)
+            AppLanguage.get(getApplication(), R.string.msg_legacy_failed)
+        else authFailureMessage(getApplication(), error)
+    }
+
+    /** Keep the diagnosis and connection state when only its display language changes. */
+    fun refreshLanguage() {
+        val error = lastFailure ?: return
+        if (mutable.value.error != null)
+            mutable.value = mutable.value.copy(error = failureMessage(error, failedLegacyImport))
+    }
 
     fun notesModel(services: NotesServices): NotesViewModel {
         if (notesServices !== services) {
@@ -61,7 +78,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 mutable.value = ConnectionScreenState(restoring = false,
-                    error = authFailureMessage(error), storageFailed = true)
+                    error = failureMessage(error), storageFailed = true)
             }
         }
     }
@@ -85,7 +102,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 mutable.value = ConnectionScreenState(restoring = false, services = services)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                mutable.value = mutable.value.copy(busy = false, error = authFailureMessage(error))
+                mutable.value = mutable.value.copy(busy = false, error = failureMessage(error))
             }
         }
     }
@@ -103,9 +120,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 mutable.value = ConnectionScreenState(restoring = false, services = services)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                mutable.value = mutable.value.copy(busy = false, error = if (error is LegacyImportException)
-                    authFailureMessage(error) else if (import)
-                    "Не удалось перенести старую копию. Исходные данные сохранены на телефоне." else authFailureMessage(error))
+                mutable.value = mutable.value.copy(busy = false, error = failureMessage(error, import))
             }
         }
     }
@@ -120,7 +135,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 mutable.value = ConnectionScreenState(restoring = false)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                mutable.value = mutable.value.copy(busy = false, error = authFailureMessage(error))
+                mutable.value = mutable.value.copy(busy = false, error = failureMessage(error))
             }
         }
     }

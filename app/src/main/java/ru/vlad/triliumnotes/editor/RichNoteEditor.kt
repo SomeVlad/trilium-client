@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -29,6 +30,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.ByteArrayInputStream
+import ru.vlad.triliumnotes.AppLanguage
 
 /** Loaded on WebView's request thread, using native authenticated transport and cache. */
 data class EditorResource(val mimeType: String, val bytes: ByteArray)
@@ -74,8 +76,13 @@ fun RichNoteEditor(
     serverUrl: String = "",
     controller: RichNoteEditorController? = null,
 ) {
-    key(noteKey) {
-        val context = LocalContext.current
+    val context = LocalContext.current
+    // Observe configuration changes as well as the context used to create this WebView.
+    val configuration = LocalConfiguration.current
+    val language = remember(context, configuration) {
+        AppLanguage.language(context)
+    }
+    key(noteKey, language) {
         val lifecycle = LocalLifecycleOwner.current.lifecycle
         val colors = MaterialTheme.colorScheme
         val latestTitle = rememberUpdatedState(onTitleChanged)
@@ -97,6 +104,7 @@ fun RichNoteEditor(
             if (value != delivery.title) { delivery.title = value; latestTitle.value(value) }
         }
         val theme = JSONObject()
+            .put("language", language)
             .put("background", cssColor(colors.background.toArgb()))
             .put("foreground", cssColor(colors.onBackground.toArgb()))
             .put("muted", cssColor(colors.onSurfaceVariant.toArgb()))
@@ -182,7 +190,7 @@ fun RichNoteEditor(
                                 val stream = if (path == "editor/index.html") {
                                     val html = context.assets.open(path).bufferedReader().use { it.readText() }
                                     ByteArrayInputStream(html.replace("<html lang=\"ru\">",
-                                        "<html lang=\"ru\" style=\"$initialThemeVariables\">").toByteArray(Charsets.UTF_8))
+                                        "<html lang=\"$language\" style=\"$initialThemeVariables\">").toByteArray(Charsets.UTF_8))
                                 } else context.assets.open(path)
                                 WebResourceResponse(mime, "UTF-8", stream)
                             } catch (_: Exception) { blocked() }

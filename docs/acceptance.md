@@ -1,6 +1,16 @@
 # Validation record
 
-This record includes validation of **0.4.2** HTML line breaks, **0.4.1** publication changes, **0.4.0** runtime authentication and folders, and the earlier **0.3.5** baseline. It is not a claim that every Android device or Trilium version is supported. Public screenshots and committed test data are synthetic; optional private fixtures are injected locally and never bundled.
+This record includes validation of **0.4.3** localization, **0.4.2** HTML line breaks, **0.4.1** publication changes, **0.4.0** runtime authentication and folders, and the earlier **0.3.5** baseline. It is not a claim that every Android device or Trilium version is supported. Public screenshots and committed test data are synthetic; optional private fixtures are injected locally and never bundled.
+
+## Version 0.4.3
+
+- Russian and English cover native navigation, connection setup and errors, dialogs, sync details, attachments, accessibility labels, and the bundled editor. Before a manual choice, the primary system language selects English or Russian; every other primary language selects Russian, including a French/English language list. The language row on the connection and settings screens offers exactly **Русский** and **English**. A manual selection persists independently of the server session, including when it matches the initial default.
+- 151 JVM tests passed with no failures or skips. New checks exercise actual resources, language fallback, application and source-context isolation, localized error formatting, private exception-content redaction and unchanged user folder titles. Resource-aware Robolectric tests explicitly use API 35 on JDK 17.
+- Debug and instrumentation APKs compile; Android lint reports 0 errors. The release remains an APK, containing both languages without a network download.
+- A 360 dp API 36 emulator confirmed English connection/About screens and an actual synthetic HTTP 401 error. With system languages French then English, the same real Activity, About screen, HTTP 401 error and Android text-selection menu use Russian. Screenshots contain only synthetic data and were independently reviewed.
+- 48 unique Android checks passed; the optional private-fixture line-break case was skipped because no private data was injected. The final language run passed all 15 checks: three settings checks, nine automatic-language editor checks and three saved-language override checks. They cover exactly two menu choices, activity recreation/relaunch, placeholders, accessibility, CKEditor headings/dialog labels, unchanged HTML/source-mode round trips and a failed editor-bundle fallback that retains the exact source. The earlier 33 regression checks cover editing, line breaks, connection UI and folder creation.
+- Stored note titles and bodies are not translated. The pre-existing server fallback for legacy blank titles remains stable, so a language change cannot reinterpret pending sync operations. Retry behavior uses an explicit local-write failure flag rather than comparing translated error strings.
+- Existing note/sync errors are stored as text and may retain their earlier language until the next action or restart. Authentication errors are reformatted immediately after a manual language change, preserving the diagnosis, storage-failure state and original session file.
 
 ## Version 0.4.2
 
@@ -56,7 +66,7 @@ Folder and search scroll restoration passed using Android's system Back key comm
 - These checks used an emulator and synthetic fixtures, not a broad physical-device matrix.
 - ETAPI does not provide atomic conditional writes. Conflict checks cannot eliminate a concurrent write between checking and saving.
 - Offline availability depends on completion of the initial download. Android can defer background sync.
-- Deletion has no client-side undo. Unsupported special note types are described in the [README](../README.md).
+- Deletion has no client-side undo. Unsupported special note types are described in the [user guide](guide.md).
 - Source-release configuration changes require their own build checks; the results above describe the app acceptance run, not a new run of that suite after every documentation change.
 
 The [synthetic screenshots](screenshots/) illustrate the UI. For reproducible local commands, see [CONTRIBUTING.md](../CONTRIBUTING.md); the [build workflow](../.github/workflows/build.yml) validates the runtime-configured APK.

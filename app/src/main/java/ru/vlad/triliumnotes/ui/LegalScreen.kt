@@ -1,5 +1,8 @@
 package ru.vlad.triliumnotes.ui
 
+import ru.vlad.triliumnotes.AppLanguage
+import ru.vlad.triliumnotes.R
+
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -34,25 +37,33 @@ fun LegalScreen(onBack: () -> Unit) {
     val entry = entries.firstOrNull { it.first == selected }
     fun back() { if (entry == null) onBack() else selected = null }
     BackHandler { back() }
-    Scaffold(topBar = { TopAppBar(title = { Text(if (entry == null) "О приложении" else "Лицензия") },
-        navigationIcon = { IconButton(onClick = ::back) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Назад") } }) }) { padding ->
+    Scaffold(topBar = { TopAppBar(title = { Text(if (entry == null) AppLanguage.get(context, R.string.about) else AppLanguage.get(context, R.string.license)) },
+        navigationIcon = { IconButton(onClick = ::back) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, AppLanguage.get(context, R.string.back)) } }) }) { padding ->
         if (entry == null) {
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(24.dp)) {
                 item {
-                    Text("Trilium Client ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleLarge)
+                    Text(AppLanguage.get(context, R.string.version_name, BuildConfig.VERSION_NAME), style = MaterialTheme.typography.titleLarge)
                     Spacer(Modifier.height(12.dp))
-                    Text("Свободное приложение для Trilium.\n© 2026 участники проекта trilium-client.\nGNU GPL 3.0 или более поздняя версия. Программа предоставляется без гарантий.",
+                    Text(AppLanguage.get(context, R.string.about_description),
                         style = MaterialTheme.typography.bodyMedium)
                     TextButton(onClick = {
                         runCatching { context.startActivity(Intent(Intent.ACTION_VIEW,
                             Uri.parse("https://github.com/SomeVlad/trilium-client"))) }
-                    }) { Text("Исходный код") }
+                    }) { Text(AppLanguage.get(context, R.string.source_code)) }
                     Spacer(Modifier.height(12.dp))
-                    Text("Лицензии и уведомления", style = MaterialTheme.typography.titleMedium)
+                    Text(AppLanguage.get(context, R.string.licenses_notices), style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
                 }
                 items(entries, key = { it.first }) { (path, title) ->
-                    Text(title, style = MaterialTheme.typography.bodyMedium,
+                    Text(when (path) {
+                        "licenses/NOTICE.txt" -> AppLanguage.get(context, R.string.legal_about_app)
+                        "licenses/THIRD_PARTY_NOTICES.md.txt" -> AppLanguage.get(context, R.string.legal_third_party)
+                        "editor/vendor/NOTICE.txt" -> AppLanguage.get(context, R.string.legal_editor_notice)
+                        "editor/vendor/LICENSE.md" -> AppLanguage.get(context, R.string.legal_editor_components)
+                        "editor/vendor/COPYING.GPL" -> AppLanguage.get(context, R.string.legal_editor_gpl)
+                        "editor/vendor/THIRD_PARTY_LICENSES.txt" -> AppLanguage.get(context, R.string.legal_editor_dependencies)
+                        else -> title
+                    }, style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.fillMaxWidth().clickable { selected = path }.padding(vertical = 14.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }

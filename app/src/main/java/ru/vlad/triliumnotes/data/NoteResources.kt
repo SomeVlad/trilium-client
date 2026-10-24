@@ -1,5 +1,7 @@
 package ru.vlad.triliumnotes.data
 
+import ru.vlad.triliumnotes.AppLanguage
+import ru.vlad.triliumnotes.R
 import android.content.Context
 import android.util.AtomicFile
 import kotlinx.coroutines.Dispatchers
@@ -61,7 +63,7 @@ internal fun resolveResourceTarget(value: String, serverUrl: String): ResourceTa
 
 /** Private persistent cache, also used by Android's native attachment viewers while offline. */
 class NoteResources(
-    context: Context,
+    private val context: Context,
     private val api: TriliumApi,
     private val serverUrl: String = api.serverUrl,
     private val anonymousClient: OkHttpClient = OkHttpClient.Builder().connectTimeout(8, TimeUnit.SECONDS)
@@ -87,7 +89,7 @@ class NoteResources(
     suspend fun loadLinkedAttachment(path: String): CachedAttachment = withContext(Dispatchers.IO) {
         val target = requireNotNull(resolveResourceTarget(path, serverUrl)) { "Unsupported attachment link" }
         val name = runCatching { URI(path).path.substringAfterLast('/') }.getOrDefault("")
-            .takeUnless { it in setOf("", "content", "download", target.id) } ?: "Вложение"
+            .takeUnless { it in setOf("", "content", "download", target.id) } ?: AppLanguage.get(context, R.string.msg_attachment_name)
         read(target) { export(target.cacheKey, it, name, "application/octet-stream") }
     }
 
@@ -122,7 +124,7 @@ class NoteResources(
             val target = resolveResourceTarget(path, serverUrl)
             if (target != null && target.attachment && target.id in validatedAttachmentIds) return@forEach
             if (target != null) read(target, allowStaleOnError = false) { Unit }
-            else if (readPublicImage(path) == null) throw IOException("Не удалось сохранить изображение для офлайн-доступа")
+            else if (readPublicImage(path) == null) throw IOException("Could not save image for offline access")
         }
         paths.size
     }
@@ -130,7 +132,7 @@ class NoteResources(
     private fun resourceVersion(note: NoteMeta) = note.blobId ?: note.modifiedAt.orEmpty()
 
     private fun BinaryFile.inlineContent(): ResourceContent {
-        if (file.length() > MAX_INLINE_RESOURCE_BYTES) throw IOException("Ресурс превышает лимит просмотра 20 МиБ")
+        if (file.length() > MAX_INLINE_RESOURCE_BYTES) throw IOException("Resource exceeds the 20 MiB preview limit")
         return ResourceContent(mimeType, file.inputStream().use { it.readResourceBytes() })
     }
 
@@ -173,7 +175,7 @@ class NoteResources(
                 throw error
             }
         }
-        return CachedAttachment(export, mime, title.ifBlank { "Вложение$suffix" })
+        return CachedAttachment(export, mime, title.ifBlank { AppLanguage.get(context, R.string.msg_attachment_name) + suffix })
     }
 
     private suspend fun <T> read(target: ResourceTarget, version: String? = null, allowStaleOnError: Boolean = true,

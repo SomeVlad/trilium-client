@@ -1,5 +1,8 @@
 package ru.vlad.triliumnotes.data
 
+import ru.vlad.triliumnotes.AppLanguage
+import ru.vlad.triliumnotes.R
+import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -15,8 +18,8 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-class InvalidServerUrlException(message: String) : IllegalArgumentException(message)
-class InvalidAuthInputException(message: String) : IllegalArgumentException(message)
+class InvalidServerUrlException(val messageId: Int) : IllegalArgumentException("Invalid server address")
+class InvalidAuthInputException(val messageId: Int) : IllegalArgumentException("Invalid authentication input")
 class InvalidAuthResponseException : IOException("Server did not return a Trilium authentication token")
 
 /** The token never appears in diagnostics or generated data-class representations. */
@@ -33,17 +36,17 @@ data class TriliumSession(
 fun normalizeServerUrl(value: String, allowInsecureHttp: Boolean = false): String {
     val input = value.trim()
     val uri = runCatching { URI(input) }.getOrNull()
-        ?: throw InvalidServerUrlException("Укажите полный адрес сервера, например https://notes.example.com")
+        ?: throw InvalidServerUrlException(R.string.msg_server_url_required)
     if (uri.isOpaque || uri.rawAuthority.isNullOrBlank())
-        throw InvalidServerUrlException("Укажите полный адрес сервера, например https://notes.example.com")
+        throw InvalidServerUrlException(R.string.msg_server_url_required)
     if (uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null || '\\' in input)
-        throw InvalidServerUrlException("Адрес сервера не должен содержать логин, параметры или фрагмент")
+        throw InvalidServerUrlException(R.string.msg_server_url_components)
     val url = input.toHttpUrlOrNull()
-        ?: throw InvalidServerUrlException("Укажите полный адрес сервера, например https://notes.example.com")
+        ?: throw InvalidServerUrlException(R.string.msg_server_url_required)
     if (url.scheme != "https" && !allowInsecureHttp)
-        throw InvalidServerUrlException("Для HTTP включите разрешение незащищённого соединения")
+        throw InvalidServerUrlException(R.string.msg_http_opt_in)
     if (url.username.isNotEmpty() || url.password.isNotEmpty())
-        throw InvalidServerUrlException("Адрес сервера не должен содержать логин или пароль")
+        throw InvalidServerUrlException(R.string.msg_url_credentials)
     return url.toString().trimEnd('/')
 }
 
@@ -64,7 +67,7 @@ class TriliumAuth(
         allowInsecureHttp: Boolean = false,
     ): TriliumSession = withContext(Dispatchers.IO) {
         val normalized = normalizeServerUrl(serverUrl, allowInsecureHttp)
-        if (secret.isBlank()) throw InvalidAuthInputException(if (useToken) "Введите ETAPI-токен" else "Введите пароль Trilium")
+        if (secret.isBlank()) throw InvalidAuthInputException(if (useToken) R.string.msg_token_required else R.string.msg_password_required)
         val token = if (useToken) secret.removePrefix("Bearer ").trim() else {
             val body = JSONObject().put("password", secret).toString()
                 .toRequestBody("application/json; charset=utf-8".toMediaType())
@@ -79,30 +82,33 @@ class TriliumAuth(
                     ?: throw InvalidAuthResponseException()
             }
         }
-        if (token.isBlank() || !token.all { it in '!'..'~' }) throw InvalidAuthInputException("Некорректный ETAPI-токен")
+        if (token.isBlank() || !token.all { it in '!'..'~' }) throw InvalidAuthInputException(R.string.msg_invalid_token)
         TriliumApi(normalized, token, client).validateSession()
         TriliumSession(UUID.randomUUID().toString(), accountIdFor(normalized), normalized, token, !useToken)
     }
 }
 
-fun authFailureMessage(error: Throwable): String = when (error) {
-    is InvalidServerUrlException -> error.message.orEmpty()
+fun authFailureMessage(context: Context, error: Throwable): String {
+    fun text(id: Int, vararg args: Any) = AppLanguage.get(context, id, *args)
+    return when (error) {
+    is InvalidServerUrlException -> text(error.messageId)
     is ApiException -> when (error.status) {
-        400, 401 -> "Неверный пароль или ETAPI-токен. Проверьте данные входа."
-        403 -> "Сервер отказал в доступе. Проверьте пароль, токен и правила прокси."
-        404, 405 -> "ETAPI недоступен по этому адресу. Проверьте адрес сервера и его подпуть."
-        in 300..399 -> "Сервер перенаправляет запрос. Укажите конечный адрес Trilium без страницы входа прокси."
-        else -> "Сервер вернул ошибку HTTP ${error.status}. Попробуйте позже."
+        400, 401 -> text(R.string.msg_invalid_credentials)
+        403 -> text(R.string.msg_auth_forbidden)
+        404, 405 -> text(R.string.msg_etapi_unavailable)
+        in 300..399 -> text(R.string.msg_auth_redirect)
+        else -> text(R.string.msg_auth_http, error.status)
     }
-    is UnexpectedHtmlResponseException -> "Вместо Trilium API получена веб-страница. Проверьте адрес, вход прокси или CAPTCHA."
-    is InvalidAuthResponseException -> "Сервер вернул некорректный ответ Trilium. Проверьте адрес и поддержку ETAPI."
-    is SessionStorageException -> "Не удалось открыть защищённое хранилище входа. Данные и локальные заметки сохранены."
-    is javax.net.ssl.SSLException -> "Не удалось проверить TLS-сертификат сервера. Проверьте сертификат и адрес."
-    is java.net.UnknownHostException -> "Сервер не найден. Проверьте адрес и подключение."
-    is java.net.SocketTimeoutException -> "Сервер не ответил вовремя. Проверьте подключение и повторите вход."
-    is InvalidAuthInputException -> error.message.orEmpty()
-    is LegacyImportException -> error.message.orEmpty()
-    is IllegalArgumentException -> "Проверьте адрес сервера и данные входа"
-    is CancellationException -> "Вход отменён"
-    else -> "Не удалось подключиться к Trilium. Проверьте адрес сервера и сеть."
+    is UnexpectedHtmlResponseException -> text(R.string.msg_auth_html)
+    is InvalidAuthResponseException -> text(R.string.msg_auth_response)
+    is SessionStorageException -> text(R.string.msg_auth_storage)
+    is javax.net.ssl.SSLException -> text(R.string.msg_auth_tls)
+    is java.net.UnknownHostException -> text(R.string.msg_auth_dns)
+    is java.net.SocketTimeoutException -> text(R.string.msg_auth_timeout)
+    is InvalidAuthInputException -> text(error.messageId)
+    is LegacyImportException -> text(error.messageId, *error.arguments)
+    is IllegalArgumentException -> text(R.string.msg_auth_input)
+    is CancellationException -> text(R.string.msg_auth_cancelled)
+    else -> text(R.string.msg_auth_connect)
+}
 }

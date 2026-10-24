@@ -9,6 +9,25 @@
     title.value = initial.title;
     const isMarkdown = initial.markdown != null;
     let editor = null, ready = false, options = window.pocketOptions || initial.options || {}, lastHtml = initial.html;
+    // Language belongs to the editor UI. Note text and serialized source are never translated.
+    // Keep Russian for callers that predate the native language option.
+    const language = options.language === 'en' ? 'en' : 'ru';
+    const text = language === 'en' ? {
+        title:'Title', untitled:'Untitled', noteTitle:'Note title', source:'Source text', body:'Note text…',
+        error:'Could not open the visual editor. The source text is available below.',
+        libraryError:'Editor library could not be loaded', embedded:'Embedded material', embeddedHtml:'Embedded HTML',
+        paragraph:'Text', heading:'Heading', plainText:'Plain text',
+    } : {
+        title:'Название', untitled:'Без названия', noteTitle:'Название заметки', source:'Исходный текст', body:'Текст заметки…',
+        error:'Не удалось открыть визуальный редактор. Исходный текст доступен ниже.',
+        libraryError:'Не удалось загрузить редактор', embedded:'Встроенный материал', embeddedHtml:'Встроенный HTML',
+        paragraph:'Текст', heading:'Заголовок', plainText:'Текст',
+    };
+    document.documentElement.lang = language;
+    document.documentElement.style.setProperty('--embedded-material', JSON.stringify(text.embedded));
+    title.setAttribute('aria-label', text.noteTitle);
+    fallback.setAttribute('aria-label', text.source);
+    document.getElementById('error').textContent = text.error;
     let dirty = false, applyingSource = false, htmlRevision = 0, titleRevision = 0;
     let editorPromise = null, editorLibraryPromise = null, fallbackActive = false;
     let titleFocusPending = !!initial.focusTitle, editingFocusApplied = false;
@@ -91,11 +110,11 @@
                 replacement.setAttribute('data-pocket-embed-url', url);
                 replacement.setAttribute('contenteditable', 'false');
                 const strong = doc.createElement('strong');
-                strong.textContent = node.getAttribute('title') || 'Встроенный материал';
+                strong.textContent = node.getAttribute('title') || text.embedded;
                 const address = doc.createElement('span');
                 address.textContent = url;
                 replacement.append(strong, doc.createElement('br'), address);
-            } else replacement.textContent = 'Встроенный HTML · ' + node.tagName.toLowerCase();
+            } else replacement.textContent = text.embeddedHtml + ' · ' + node.tagName.toLowerCase();
             node.replaceWith(replacement);
         });
         if (!isMarkdown) preserveHtmlLineBreaks(doc);
@@ -241,7 +260,7 @@
         document.body.classList.toggle('editing', !!options.editing);
         document.body.classList.toggle('keyboard-visible', !!options.keyboardVisible);
         title.readOnly = !options.editing || (!editor && !fallbackActive);
-        title.placeholder = options.editing ? 'Название' : 'Без названия';
+        title.placeholder = options.editing ? text.title : text.untitled;
         fallback.readOnly = !options.editing;
         if (!options.editing) editingFocusApplied = false;
         if (editor) {
@@ -264,13 +283,13 @@
                 const script = document.createElement('script');
                 script.src = src;
                 script.onload = resolve;
-                script.onerror = () => reject(new Error('Editor library could not be loaded'));
+                script.onerror = () => reject(new Error(text.libraryError));
                 document.head.append(script);
             });
         }
         editorLibraryPromise = (async () => {
             if (!window.CKEDITOR) await loadScript('vendor/ckeditor5.umd.js');
-            if (!window.CKEDITOR_TRANSLATIONS?.ru) await loadScript('vendor/ru.umd.js');
+            if (language === 'ru' && !window.CKEDITOR_TRANSLATIONS?.ru) await loadScript('vendor/ru.umd.js');
             return window.CKEDITOR;
         })();
         return editorLibraryPromise;
@@ -326,20 +345,21 @@
         plugins.push(PocketBoundary);
         if (isMarkdown) plugins.push(C.Markdown);
         return C.ClassicEditor.create(document.getElementById('editor'), {
-            licenseKey:'GPL', plugins, language:'ru', translations:[CKEDITOR_TRANSLATIONS],
+            licenseKey:'GPL', plugins, language,
+            translations:language === 'ru' ? [window.CKEDITOR_TRANSLATIONS] : [],
             initialData:isMarkdown ? initial.markdown : initial.html,
             toolbar:{items:['undo','redo','|','bold','italic','heading','|','bulletedList','numberedList','todoList',
                 '|','link','insertTable','insertImageViaUrl','blockQuote','codeBlock','horizontalLine',
                 ...(isMarkdown ? [] : ['|','fontColor','fontBackgroundColor','alignment']), 'outdent','indent','sourceEditing'],shouldNotGroupWhenFull:false},
             image:{toolbar:['imageTextAlternative','toggleImageCaption','imageStyle:inline','imageStyle:block']},
             table:{contentToolbar:isMarkdown ? ['tableColumn','tableRow','mergeTableCells'] : ['tableColumn','tableRow','mergeTableCells','tableProperties','tableCellProperties']},
-            heading:{options:[{model:'paragraph',title:'Текст',class:'ck-heading_paragraph'}, ...[1,2,3,4,5,6].map(n =>
-                ({model:'heading'+n,view:'h'+n,title:'Заголовок '+n,class:'ck-heading_heading'+n}))]},
+            heading:{options:[{model:'paragraph',title:text.paragraph,class:'ck-heading_paragraph'}, ...[1,2,3,4,5,6].map(n =>
+                ({model:'heading'+n,view:'h'+n,title:text.heading+' '+n,class:'ck-heading_heading'+n}))]},
             htmlSupport:{allow:[{name:/.*/,attributes:true,classes:true,styles:true}]},
             link:{addTargetToExternalLinks:false,defaultProtocol:'https://'},
             list:{properties:{styles:true,startIndex:true,reversed:true}},
-            root:{placeholder:'Текст заметки…'},
-            codeBlock:{languages:[{language:'plaintext',label:'Текст'},{language:'javascript',label:'JavaScript'},
+            root:{placeholder:text.body},
+            codeBlock:{languages:[{language:'plaintext',label:text.plainText},{language:'javascript',label:'JavaScript'},
                 {language:'python',label:'Python'},{language:'bash',label:'Shell'},{language:'json',label:'JSON'},
                 {language:'html',label:'HTML'},{language:'css',label:'CSS'},{language:'sql',label:'SQL'}]},
         });

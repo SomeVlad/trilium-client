@@ -79,7 +79,7 @@ internal fun InputStream.readResourceBytes(): ByteArray {
     while (true) {
         val count = read(chunk, 0, minOf(chunk.size, MAX_INLINE_RESOURCE_BYTES - result.size() + 1))
         if (count < 0) return result.toByteArray()
-        if (result.size() + count > MAX_INLINE_RESOURCE_BYTES) throw IOException("Ресурс превышает лимит просмотра 20 МиБ")
+        if (result.size() + count > MAX_INLINE_RESOURCE_BYTES) throw IOException("Resource exceeds the 20 MiB preview limit")
         result.write(chunk, 0, count)
     }
 }
@@ -120,7 +120,7 @@ class TriliumApi(
         .build()
 
     init {
-        require(authorization.isNotBlank() && authorization.all { it in '!'..'~' }) { "Некорректный ETAPI-токен" }
+        require(authorization.isNotBlank() && authorization.all { it in '!'..'~' }) { "Invalid ETAPI token" }
     }
 
     /** Deactivating a session also stops requests issued by an old foreground model. */
@@ -283,7 +283,7 @@ class TriliumApi(
             if (!response.isSuccessful) throw ApiException(response.code)
             val body = response.body
             if (body != null && body.contentLength() > MAX_INLINE_RESOURCE_BYTES)
-                throw IOException("Ресурс превышает лимит просмотра 20 МиБ")
+                throw IOException("Resource exceeds the 20 MiB preview limit")
             val bytes = body?.byteStream()?.use { it.readResourceBytes() } ?: byteArrayOf()
             BinaryContent(bytes, response.header("Content-Type")?.substringBefore(';')?.trim()
                 ?: "application/octet-stream")
@@ -344,7 +344,7 @@ class TriliumApi(
             if (responseBody != null && (responseBody.contentLength() > MAX_INLINE_RESOURCE_BYTES ||
                     (responseBody.source().request(MAX_INLINE_RESOURCE_BYTES + 1L) &&
                         responseBody.source().buffer.size > MAX_INLINE_RESOURCE_BYTES))) {
-                throw IOException("Ответ сервера превышает лимит 20 МиБ")
+                throw IOException("Server response exceeds the 20 MiB limit")
             }
             val body = responseBody?.string().orEmpty()
             if ((allowsHtmlBody && isKnownCrowdSecCaptchaPage(body)) ||
