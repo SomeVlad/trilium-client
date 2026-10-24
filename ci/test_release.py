@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -47,13 +48,34 @@ class ReleaseTest(unittest.TestCase):
         with patch.object(verify, "run", side_effect=[signature, package.replace("42", "43")]), self.assertRaises(ValueError):
             verify.verify("v1.2.3", self.build, apk="app.apk", apksigner="apksigner", aapt="aapt")
 
-    def test_tag_commit_and_main_ancestry(self):
+    def test_tag_commit_and_master_ancestry(self):
         with patch.object(verify, "run", side_effect=["head", "other"]), self.assertRaises(ValueError):
             verify.verify("v1.2.3", self.build, check_git=True)
         with patch.object(verify, "run", side_effect=["head", "head"]), \
                 patch.object(verify.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "git")), \
                 self.assertRaises(subprocess.CalledProcessError):
             verify.verify("v1.2.3", self.build, check_git=True)
+
+    def test_real_master_repository_accepts_its_release_and_rejects_unrelated_history(self):
+        def git(*arguments):
+            return subprocess.run(["git", *arguments], cwd=self.path, check=True,
+                                  capture_output=True, text=True)
+
+        git("init", "-b", "master")
+        git("config", "user.name", "Release test")
+        git("config", "user.email", "ci@example.test")
+        git("add", self.build.name)
+        git("commit", "-m", "Release sources")
+        git("tag", "v1.2.3")
+        git("update-ref", "refs/remotes/origin/master", "HEAD")
+        command = [sys.executable, str(ROOT / "scripts/verify-release.py"),
+                   "--tag", "v1.2.3", "--build-file", str(self.build), "--check-git"]
+        subprocess.run(command, cwd=self.path, check=True, capture_output=True, text=True)
+        git("checkout", "--orphan", "unrelated")
+        git("commit", "-m", "Unrelated sources")
+        git("tag", "-f", "v1.2.3")
+        result = subprocess.run(command, cwd=self.path, capture_output=True, text=True)
+        self.assertNotEqual(0, result.returncode)
 
     def assets(self):
         self.build.unlink()

@@ -25,7 +25,7 @@ def verify(tag, build_file, check_git=False, apk=None, apksigner=None, aapt=None
         head = run("git", "rev-parse", "HEAD")
         if run("git", "rev-parse", f"refs/tags/{tag}^{{commit}}") != head:
             raise ValueError("Checked-out commit does not match release tag")
-        subprocess.run(["git", "merge-base", "--is-ancestor", head, "refs/remotes/origin/main"], check=True)
+        subprocess.run(["git", "merge-base", "--is-ancestor", head, "refs/remotes/origin/master"], check=True)
     if apk:
         if not apksigner or not aapt:
             raise ValueError("APK verification requires --apksigner and --aapt")

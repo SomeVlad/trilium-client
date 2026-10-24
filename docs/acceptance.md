@@ -1,76 +1,18 @@
-# Validation record
+# Проверки 0.4.3
 
-This record includes validation of **0.4.3** localization, **0.4.2** HTML line breaks, **0.4.1** publication changes, **0.4.0** runtime authentication and folders, and the earlier **0.3.5** baseline. It is not a claim that every Android device or Trilium version is supported. Public screenshots and committed test data are synthetic; optional private fixtures are injected locally and never bundled.
+Проверено на эмуляторе Android API 36 с экраном 360 dp. Данные и публичные скриншоты искусственные.
 
-## Version 0.4.3
+- **151 JVM-тест пройден**, без ошибок и пропусков. Проверены ресурсы, выбор языка, сообщения об ошибках, защита приватных данных и сохранение пользовательских заголовков.
+- **48 Android-проверок пройдены**; одна необязательная проверка с приватной фикстурой пропущена, поскольку приватные данные в этот запуск не передавались.
+- Из них 15 проверок языка: три проверки настройки, девять автоматического выбора в редакторе и три ручного выбора вопреки системному языку. Остальные 33 проверяют редактирование, переносы строк, подключение и папки.
+- Меню входа и **Настроек** содержит ровно **Русский** и **English**. Выбор сохраняется отдельно от серверной сессии, даже если совпал с начальным языком.
+- В реальном запуске при системном русском выбран English; после принудительной остановки и повторного запуска сохранился английский. Обратный выбор русского также проверен.
+- При системном французском с дополнительным английским интерфейс, ошибка HTTP 401 и стандартное меню выделения текста используют русский.
+- Проверены подписи доступности, CKEditor, исходный режим и резервный редактор. Заголовки и тексты заметок не переводятся; открытие и смена режима не создают ложных правок.
+- Debug- и тестовый APK собраны; Android lint завершился без ошибок. Скриншоты настройки языка и редактора прошли независимое визуальное ревью.
 
-- Russian and English cover native navigation, connection setup and errors, dialogs, sync details, attachments, accessibility labels, and the bundled editor. Before a manual choice, the primary system language selects English or Russian; every other primary language selects Russian, including a French/English language list. The language row on the connection and settings screens offers exactly **Русский** and **English**. A manual selection persists independently of the server session, including when it matches the initial default.
-- 151 JVM tests passed with no failures or skips. New checks exercise actual resources, language fallback, application and source-context isolation, localized error formatting, private exception-content redaction and unchanged user folder titles. Resource-aware Robolectric tests explicitly use API 35 on JDK 17.
-- Debug and instrumentation APKs compile; Android lint reports 0 errors. The release remains an APK, containing both languages without a network download.
-- A 360 dp API 36 emulator confirmed English connection/About screens and an actual synthetic HTTP 401 error. With system languages French then English, the same real Activity, About screen, HTTP 401 error and Android text-selection menu use Russian. Screenshots contain only synthetic data and were independently reviewed.
-- 48 unique Android checks passed; the optional private-fixture line-break case was skipped because no private data was injected. The final language run passed all 15 checks: three settings checks, nine automatic-language editor checks and three saved-language override checks. They cover exactly two menu choices, activity recreation/relaunch, placeholders, accessibility, CKEditor headings/dialog labels, unchanged HTML/source-mode round trips and a failed editor-bundle fallback that retains the exact source. The earlier 33 regression checks cover editing, line breaks, connection UI and folder creation.
-- Stored note titles and bodies are not translated. The pre-existing server fallback for legacy blank titles remains stable, so a language change cannot reinterpret pending sync operations. Retry behavior uses an explicit local-write failure flag rather than comparing translated error strings.
-- Existing note/sync errors are stored as text and may retain their earlier language until the next action or restart. Authentication errors are reformatted immediately after a manual language change, preserving the diagnosis, storage-failure state and original session file.
+Сообщения об ошибках заметок и синхронизации могут сохранять прежний язык до повторной операции; ошибки входа меняют язык сразу, сохраняя причину сбоя.
 
-## Version 0.4.2
+Физические устройства, API 28 и жест «Назад» от края экрана полноценно не проверялись.
 
-- The new Android regression reproduced the original defect before the fix: two newline-separated HTML tokens had a vertical separation of 0 px instead of one 28.05 px line.
-- 17 unique Android editor checks passed on an API 36 emulator: seven new line-break cases plus the existing rich editor and lazy reader suites. They cover line geometry, empty lines, inline code and links, unchanged snapshots and zero callbacks on opening, a real edit followed by reopening, preformatted code, existing `<br>` tags, explicit whitespace styles, structural HTML indentation and Markdown.
-- Two privately supplied HTML notes passed the same reader/edit/reopen line-geometry checks. The independent reviewer inspected their local screenshots. No private content, identifiers or screenshots were committed, and no server writes were needed for these checks.
-- A System UI ANR initially obscured screenshots and blocked two keyboard-focus checks. After dismissing that emulator dialog, the two checks and private screenshot scenario passed. Screenshot capture now requires a visible, focused WebView before capture; an obscured window fails the test.
-- Debug/instrumentation builds and release lint passed (0 errors, 21 warnings). The independent code review found no remaining blocker in the change.
-
-The compatibility conversion applies to literal LF inside leaf HTML text blocks and bare text bodies. Opening preserves the original source bytes; a real edit can serialize those line boundaries as explicit `<br>` elements. It does not reinterpret every HTML whitespace pattern: mixed bare text around nested blocks and explicit whitespace styles retain their previous handling.
-
-## Version 0.4.1
-
-- 137 JVM tests passed with no failures or skips. New regression checks cover streaming large attachments, interrupted downloads preserving the previous cache, bounded text/inline responses, cache/export filename collisions, reverse-proxy subpath resources, unchanged tree refreshes avoiding disk rewrites, and recovery of local edits or children after a remote deletion.
-- Debug, instrumentation and signed release APKs compiled; release lint reported 0 errors and 21 warnings. Most warnings report newer dependency versions; the others concern Compose conventions, backup configuration and KTX convenience APIs.
-- An independent reviewer read all 23 application Kotlin files, editor integration, manifest/resources, Gradle build logic and release scripts. A 100 MiB response under a 64 MiB JVM heap now fails with a bounded I/O error instead of the previously reproduced out-of-memory crash.
-- Fourteen Python release/source-packaging tests passed. Actionlint accepted the pinned GitHub workflows. These local checks are distinct from a successful hosted GitHub Actions run.
-- 21 unique Android checks passed on an API 36 emulator: connection UI, lazy HTML/Markdown reading and editing, keyboard list input, attachment viewing/retry/cancellation, and license navigation/assets. The first run caught duplicate license keys; after fixing generation, both license checks passed again.
-- The debug and signed APKs each contain 65 unique, nonempty indexed license assets and no loopback test certificate. APK package/version and the existing release certificate were verified.
-- The signed APK installed over 0.4.0 without uninstalling. About and the offline GPL text opened in the minimized release build; light/dark screenshots were inspected.
-- See [publication review](publication-review.md) for publication scope, source packaging and remaining limits.
-
-## Version 0.4.0
-
-- 122 JVM tests passed with no failures or skips: password and token authentication, invalid credentials, HTML proxy challenges, redirect refusal, URL normalization, encrypted-session handling, per-server storage, stale background work, explicit legacy import, folder persistence and parent ordering, plus the existing repository suite.
-- 11 unique Android checks passed on an Android 16 / API 36 emulator: six connection UI checks, three folder UI checks, resume sync lifecycle, and the new real-Activity connection lifecycle scenario. Eighteen screenshots cover both themes.
-- The connection lifecycle check uses Android Keystore on the emulator. It verifies the password is absent from persisted session data, the token and URL are encrypted, a durable draft survives Activity recreation, session restoration does not authenticate again, and sign-out/relogin preserves the draft.
-- An isolated actual Trilium **0.106.0** accepted password login (201), rejected a wrong password (401), accepted token-authenticated app-info/root requests, and created a native empty `book` with a text-note child. No production note data was used.
-
-- The signed APK installed over 0.3.5 without uninstalling. A synthetic unsent legacy edit was explicitly imported, reached the actual test server, and its original local cache remained byte-for-byte intact.
-- On the signed APK, wrong-password and successful password login, token login, local sign-out and relogin all passed against that actual server. Local sign-out did not revoke the separately supplied token.
-- With Wi-Fi and mobile data disabled, the existing session reopened after force-stop. An empty folder and child note created offline survived another force-stop and synchronized after reconnect; server reads verified `type=book` and the child's parent ID.
-- Real MainActivity screenshots at 360 dp verified login and folder creation with the keyboard visible, the error state, legacy confirmation, and offline restart. The independent product reviewer accepted these and the light/dark matrix.
-- Debug/instrumentation/release compilation and release lint completed; lint has 0 errors and 21 pre-existing warnings. The APK is signed with the same certificate as 0.3.5. Inspection found neither the prior personal server address nor token in its code/resources.
-
-## Version 0.3.5 baseline
-
-| Check | Result |
-| --- | --- |
-| JVM suite | 100 tests passed; no failures or skips |
-| Android scenarios | 34 unique checks passed: 31 focused UI checks and 3 end-to-end scenarios |
-| Build and lint | Debug, instrumentation and release builds completed; lint reported 0 errors and 21 warnings |
-| Signed upgrade | 0.3.4 → 0.3.5 installed as an update; the synthetic offline cache remained byte-for-byte intact |
-
-The JVM checks cover tree/search behavior, local persistence, retries, conflicts and deletion races. Deletion cases include failed local writes, restart recovery, an applied server DELETE whose response was lost, a subsequent 404, shared descendants, and clones discovered after an offline edit.
-
-Android checks exercised the real activity, view model and local storage against synthetic fixtures. They covered editing, confirmation and cancellation, deleting documents and folders, offline creation followed by deletion, clone handling, queue persistence across force-stop and restart, reconnect retries, and keeping a shared descendant. The signed upgrade smoke check also verified dark-theme confirmation and an offline deletion surviving force-stop.
-
-Folder and search scroll restoration passed using Android's system Back key command. **A physical edge-swipe Back gesture is not verified.** The emulator failed to perform that gesture even in Android Settings; it opened a system brightness dialog instead. No physical-device gesture check was completed, and the app was not changed to work around the emulator behavior.
-
-## Limits and follow-up
-
-- These checks used an emulator and synthetic fixtures, not a broad physical-device matrix.
-- ETAPI does not provide atomic conditional writes. Conflict checks cannot eliminate a concurrent write between checking and saving.
-- Offline availability depends on completion of the initial download. Android can defer background sync.
-- Deletion has no client-side undo. Unsupported special note types are described in the [user guide](guide.md).
-- Source-release configuration changes require their own build checks; the results above describe the app acceptance run, not a new run of that suite after every documentation change.
-
-The [synthetic screenshots](screenshots/) illustrate the UI. For reproducible local commands, see [CONTRIBUTING.md](../CONTRIBUTING.md); the [build workflow](../.github/workflows/build.yml) validates the runtime-configured APK.
-
-## Earlier source-preview preparation
-
-A clean checkout with no private properties, signing properties, or release key passed all 100 JVM tests, `assembleDebug`, and release lint (0 errors, 21 warnings). The resulting APK contains only the `.invalid` endpoint and dummy token. A separate `-PdemoBuild=true` run also passed with private local configuration present, confirming that demo mode ignores it. This run did not repeat the Android device scenarios above because application behavior was unchanged.
+[Команды проверок](../CONTRIBUTING.md) · [Скриншоты](screenshots/) · [Ревью публикации](publication-review.md)

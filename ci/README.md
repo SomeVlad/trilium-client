@@ -1,58 +1,34 @@
-# Continuous integration
+# Проверки и релизы
 
-`.github/workflows/build.yml` runs on pushes to `main`, pull requests and manual
-dispatches. It runs JVM tests, Android lint and the debug build without signing
-secrets or a Trilium server. A debug APK is retained for seven days. Release tags
-also run this workflow before the signing job. Action versions are pinned to
-commit hashes.
+[build.yml](../.github/workflows/build.yml) проверяет изменения в `master`, pull request и ручные запуски: JVM-тесты, Android lint и debug APK. Подпись и доступ к Trilium не нужны; артефакт хранится семь дней.
 
-`.github/workflows/release.yml` accepts stable tags `vMAJOR.MINOR.PATCH` only. The
-tag must match `versionName` in `app/build.gradle.kts` and point to a commit in
-`main` history. Before tagging, increment both `versionName` and `versionCode` as
-appropriate, commit and push `main`, then push the matching tag:
+[release.yml](../.github/workflows/release.yml) принимает только стабильные теги `vMAJOR.MINOR.PATCH`. Тег должен точно совпадать с `versionName` и указывать на коммит из истории `master`. Перед новым релизом обновите `versionName` и увеличьте `versionCode` в `app/build.gradle.kts`.
+
+После обновления версии и коммита отправьте ветку и новый тег; пример для `0.4.4`:
 
 ```sh
-git tag v0.4.2
-git push origin v0.4.2
+git push origin master
+git tag v0.4.4
+git push origin v0.4.4
 ```
 
-Configure these repository Actions secrets using the existing PKCS12 signing
-identity; generating another key would prevent installed users from upgrading:
+Для подписанного APK нужны четыре Actions secrets:
 
-| Secret | Value |
-| --- | --- |
-| `ANDROID_KEYSTORE_BASE64` | Base64 encoding of the existing PKCS12 keystore |
-| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
-| `ANDROID_KEY_ALIAS` | Signing key alias |
-| `ANDROID_KEY_PASSWORD` | Private key password |
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
 
-Only the signing step receives the passwords. The keystore is decoded under
-`runner.temp`, is deleted even if the build fails and is never uploaded or cached.
-Release builds disable Gradle caches. The workflow verifies the APK package,
-version code/name and its signing certificate SHA256:
+Сохраняйте существующий ключ подписи: другой ключ не позволит обновить уже установленное приложение. CI проверяет подпись, идентификатор пакета и версию APK; временный файл ключа удаляется после сборки.
 
-```text
-ce0d4a08415d8560d7b1795aa14d91e3352d1a869ba1f0fd4066e582975e65de
-```
+Релиз содержит `trilium-client-VERSION.apk`, `trilium-client-VERSION-source.tar.gz` и `SHA256SUMS`. APK и исходники собираются из точного тега релиза. Перед публикацией CI скачивает загруженные файлы и проверяет контрольные суммы.
 
-The release job has `contents: write`; other jobs have read-only repository
-access. Pull requests never enter the release workflow. No workflow needs a
-Trilium connection URL or token.
+Опубликованные файлы не перезаписываются. Для изменений выпускайте новую версию и тег; несовпадающий незавершённый черновик сначала проверьте вручную.
 
-The release contains `trilium-client-VERSION.apk`,
-`trilium-client-VERSION-source.tar.gz` and `SHA256SUMS`. The source archive comes
-from the release tag and includes the corresponding third-party source material
-described in the repository's distribution documentation. All assets are
-uploaded to a draft and downloaded again to verify their checksums before
-publication. A rerun accepts matching existing assets and refuses to overwrite
-different ones or modify an already published incomplete release. If a failed
-build left a draft with different bytes, inspect and delete that draft manually
-before rerunning; published releases should receive a new version tag.
-
-Local workflow checks (no signing secret needed):
+Локальные проверки автоматизации:
 
 ```sh
 actionlint .github/workflows/*.yml
-python3 scripts/verify-release.py --tag v0.4.2
+python3 scripts/verify-release.py --tag v0.4.3
 python3 -m unittest discover -s ci -p 'test_*.py'
 ```

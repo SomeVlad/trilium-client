@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Validate stable version and main ancestry
+      - name: Validate stable version and master ancestry
         id: version
         env:
           RELEASE_TAG: ${{ github.ref_name }}
