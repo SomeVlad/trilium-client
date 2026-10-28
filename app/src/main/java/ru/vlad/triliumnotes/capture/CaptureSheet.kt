@@ -102,8 +102,13 @@ fun CaptureSheet(
                     }
                 }
                 if (locked) Text(label(R.string.capture_destination_locked), style = MaterialTheme.typography.bodySmall)
-                if (!accountMatches) Text(label(R.string.capture_account_changed), color = MaterialTheme.colorScheme.error)
-                if (error != null) Text(error, color = MaterialTheme.colorScheme.error)
+            }
+            if (!accountMatches || error != null) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).testTag("capture-feedback"),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!accountMatches) Text(label(R.string.capture_account_changed), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                    if (error != null) Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                }
             }
             // Keep explicit delivery actions above the keyboard while the form can scroll.
             FlowRow(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp), horizontalArrangement = Arrangement.End) {

@@ -34,6 +34,8 @@ class MainActivity : ComponentActivity() {
     private var model: NotesViewModel? = null
     private val captureInbox by lazy { CaptureInbox(applicationContext) }
     private var quickNoteRequest by mutableStateOf<String?>(null)
+    private var contentIntentRevision by mutableIntStateOf(0)
+    private var captureIdsAtLastIntent = emptySet<String>()
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     private var callbackRegistered = false
     private val connectionState = ConnectionState()
@@ -70,6 +72,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         quickNoteRequest = QuickNoteRequest.restore(intent, savedInstanceState)
+        captureIdsAtLastIntent = captureInbox.entries.value.map { it.id }.toSet()
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current
@@ -84,6 +87,9 @@ class MainActivity : ComponentActivity() {
                     else -> key(services.sessionId ?: services.serverUrl) {
                         val notes = remember { connection.notesModel(services) }
                         var settings by rememberSaveable { mutableStateOf(false) }
+                        LaunchedEffect(contentIntentRevision, quickNoteRequest) {
+                            if (contentIntentRevision > 0 || quickNoteRequest != null) settings = false
+                        }
                         val sync by notes.syncState.collectAsStateWithLifecycle()
                         val uploads by notes.uploadState.collectAsStateWithLifecycle()
                         val attachmentEdits by services.attachments.state.collectAsStateWithLifecycle()
@@ -120,7 +126,11 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         captureInbox.refresh()
-        QuickNoteRequest.fromIntent(intent)?.let { quickNoteRequest = it }
+        val request = QuickNoteRequest.fromIntent(intent)
+        request?.let { quickNoteRequest = it }
+        val captureIds = captureInbox.entries.value.map { it.id }.toSet()
+        if (request != null || captureIds.any { it !in captureIdsAtLastIntent }) contentIntentRevision++
+        captureIdsAtLastIntent = captureIds
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

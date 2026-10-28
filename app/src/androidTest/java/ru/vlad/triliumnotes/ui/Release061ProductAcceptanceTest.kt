@@ -45,22 +45,36 @@ class Release061ProductAcceptanceTest {
     private fun waitImeSettled(tag: String, above: String? = null) {
         var previous = ""
         var stableSince = SystemClock.elapsedRealtime()
-        compose.waitUntil(10_000) {
-            var imeHeight = 0
-            compose.runOnIdle {
-                imeHeight = WindowInspector.getGlobalWindowViews().maxOfOrNull {
-                    it.rootWindowInsets?.getInsets(WindowInsets.Type.ime())?.bottom ?: 0
-                } ?: 0
+        var diagnostic = "Not sampled"
+        try {
+            compose.waitUntil(10_000) {
+                var imeHeight = 0
+                var windows = ""
+                compose.runOnIdle {
+                    val roots = WindowInspector.getGlobalWindowViews()
+                    imeHeight = roots.maxOfOrNull { it.rootWindowInsets?.getInsets(WindowInsets.Type.ime())?.bottom ?: 0 } ?: 0
+                    windows = roots.joinToString { "${it.javaClass.simpleName}:focus=${it.hasWindowFocus()}:height=${it.height}:ime=${it.rootWindowInsets?.getInsets(WindowInsets.Type.ime())?.bottom}" }
+                }
+                val node = compose.onNodeWithTag(tag).fetchSemanticsNode()
+                val bounds = node.boundsInRoot
+                val aboveBounds = above?.let { compose.onNodeWithTag(it).fetchSemanticsNode().boundsInRoot }
+                val whole = bounds.top >= 0f && bounds.height >= node.size.height - 1f && bounds.width >= node.size.width - 1f
+                val clear = aboveBounds == null || bounds.bottom <= aboveBounds.top
+                diagnostic = "tag=$tag size=${node.size} root=$bounds window=${node.boundsInWindow} above=$aboveBounds ime=$imeHeight whole=$whole clear=$clear windows=$windows"
+                val geometry = "$imeHeight:$bounds"
+                val now = SystemClock.elapsedRealtime()
+                if (imeHeight <= 0 || !whole || !clear || geometry != previous) {
+                    previous = geometry; stableSince = now; false
+                } else now - stableSince >= 750
             }
-            val node = compose.onNodeWithTag(tag).fetchSemanticsNode()
-            val bounds = node.boundsInRoot
-            val whole = bounds.top >= 0f && bounds.height >= node.size.height - 1f && bounds.width >= node.size.width - 1f
-            val clear = above == null || bounds.bottom <= compose.onNodeWithTag(above).fetchSemanticsNode().boundsInRoot.top
-            val geometry = "$imeHeight:$bounds"
-            val now = SystemClock.elapsedRealtime()
-            if (imeHeight <= 0 || !whole || !clear || geometry != previous) {
-                previous = geometry; stableSince = now; false
-            } else now - stableSince >= 750
+        } catch (failure: Throwable) {
+            val name = "diagnostic-$tag-${SystemClock.uptimeMillis()}"
+            runCatching {
+                save(name)
+                val folder = File(requireNotNull(context.getExternalFilesDir(null)), InstrumentationRegistry.getArguments().getString("reviewOutput") ?: "release061-review")
+                File(folder, "$name.txt").writeText(diagnostic)
+            }.exceptionOrNull()?.let(failure::addSuppressed)
+            throw AssertionError(diagnostic, failure)
         }
     }
     private fun hideIme() { instrumentation.uiAutomation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK); SystemClock.sleep(300) }
@@ -179,4 +193,31 @@ class Release061ProductAcceptanceTest {
             }
         }
     }
+
+    @Test fun captureFeedbackStatesAtLargeFont() {
+        var state by mutableStateOf("error")
+        var generation by mutableStateOf(0)
+        compose.setContent { NotesTheme { key(generation) {
+            CaptureSheet(PendingCapture("qa062feedback-$state", "Идея прогулки", "https://example.org/weekend", emptyList(),
+                accountId = if (state == "account-mismatch") "synthetic-other-account" else null),
+                "https://notes.example.org", listOf(CaptureDestination("qa062folder", "Планы на выходные", true)),
+                busy = false, error = if (state == "error") label(R.string.msg_library_failed) else null,
+                onDismiss = {}, onSave = { _, _, _ -> }, onDiscard = {}, accountMatches = state != "account-mismatch")
+        } } }
+        fun assertFeedback() {
+            val node = compose.onNodeWithTag("capture-feedback").fetchSemanticsNode()
+            val bounds = node.boundsInRoot
+            assertTrue("Feedback must not be clipped", bounds.height >= node.size.height - 1f)
+            assertTrue("Feedback must remain above Save", bounds.bottom <= compose.onNodeWithTag("capture_save").fetchSemanticsNode().boundsInRoot.top)
+        }
+        for (mode in listOf("error", "account-mismatch")) {
+            compose.runOnIdle { state = mode; generation++ }
+            compose.waitForIdle(); assertFeedback(); save("50-$mode-no-ime")
+            compose.onNodeWithTag("capture_note_title").performClick()
+            waitImeSettled("capture_note_title", "capture-feedback")
+            assertFeedback(); save("51-$mode-ime")
+            hideIme()
+        }
+    }
+
 }
