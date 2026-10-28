@@ -188,23 +188,57 @@ class Release060AcceptanceTest {
         val attachment = AttachmentMeta("attach060", alpha.id, "file", "application/pdf", "Reading.pdf", 0)
         var attachments by mutableStateOf(listOf(attachment))
         val removed = mutableListOf<AttachmentMeta>()
+        val opened = mutableListOf<AttachmentMeta>()
         compose.setContent { NotesTheme {
             AttachmentManagerDialog(attachments, onRename = { item, title ->
                 attachments = attachments.map { if (it.id == item.id) it.copy(title = title) else it }
-            }, onDelete = { removed += it; attachments = emptyList() }, onDismiss = {})
+            }, onDelete = { removed += it; attachments = emptyList() }, onDismiss = {}, onOpen = { opened += it })
         } }
+        compose.onNodeWithText("Reading.pdf").performClick()
+        compose.onNodeWithText("PDF").assertIsDisplayed()
+        compose.onNodeWithText("application/pdf").assertDoesNotExist()
+        compose.onNodeWithTag("attachment-rename-${attachment.id}").assertDoesNotExist()
+        compose.onNodeWithTag("attachment-delete-${attachment.id}").assertDoesNotExist()
+        compose.onNodeWithTag("attachment-actions-${attachment.id}").performClick()
         compose.onNodeWithTag("attachment-rename-${attachment.id}").performClick()
         compose.onNodeWithTag("attachment-title").performTextReplacement("Weekend.pdf")
         compose.onNodeWithText(label(R.string.editor_apply)).performClick()
         compose.onNodeWithText("Weekend.pdf").assertIsDisplayed()
-        compose.runOnIdle { assertEquals(attachment.copy(title = "Weekend.pdf"), attachments.single()) }
+        compose.runOnIdle {
+            assertEquals(attachment.copy(title = "Weekend.pdf"), attachments.single())
+            assertEquals(listOf(attachment), opened)
+        }
+        compose.onNodeWithTag("attachment-actions-${attachment.id}").performClick()
         compose.onNodeWithTag("attachment-delete-${attachment.id}").performClick()
         compose.runOnIdle { assertTrue(removed.isEmpty()) }
         compose.onNodeWithText(label(R.string.cancel)).performClick()
         compose.runOnIdle { assertTrue(removed.isEmpty()) }
+        compose.onNodeWithTag("attachment-actions-${attachment.id}").performClick()
         compose.onNodeWithTag("attachment-delete-${attachment.id}").performClick()
         compose.onAllNodesWithText(label(R.string.editor_delete_attachment)).filter(hasClickAction()).onFirst().performClick()
         compose.runOnIdle { assertEquals(listOf(attachment.copy(title = "Weekend.pdf")), removed) }
+    }
+
+    @Test fun attachmentSheetKeepsBusyErrorRetryAndEmptyStatesSeparate() {
+        val attachment = AttachmentMeta("attach060", alpha.id, "file", "application/pdf", "Reading.pdf", 0)
+        var busy by mutableStateOf(true)
+        var error by mutableStateOf<String?>(null)
+        var attachments by mutableStateOf(listOf(attachment))
+        var retried = 0
+        compose.setContent { NotesTheme {
+            AttachmentManagerDialog(attachments, onRename = { _, _ -> }, onDelete = {}, onDismiss = {},
+                busy = busy, error = error, onRetry = { retried++ })
+        } }
+        compose.onNodeWithTag("attachment-open-${attachment.id}").assertIsNotEnabled()
+        compose.onNodeWithTag("attachment-actions-${attachment.id}").assertIsNotEnabled()
+        compose.runOnIdle { attachments = emptyList() }
+        compose.onNodeWithText(label(R.string.editor_no_attachments)).assertDoesNotExist()
+        compose.runOnIdle { busy = false; error = "Synthetic attachment error" }
+        compose.onNodeWithText("Synthetic attachment error").assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.editor_no_attachments)).assertDoesNotExist()
+        compose.onNodeWithTag("attachment-manager-retry").performClick()
+        compose.runOnIdle { assertEquals(1, retried); error = null }
+        compose.onNodeWithText(label(R.string.editor_no_attachments)).assertIsDisplayed()
     }
 
     @Test fun editorInsertsInternalLinkAtCurrentCursorAndPreservesSurroundingText() {

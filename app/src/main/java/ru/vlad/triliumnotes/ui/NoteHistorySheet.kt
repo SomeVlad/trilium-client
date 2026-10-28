@@ -107,7 +107,9 @@ fun NoteHistorySheet(
                     Icon(Icons.Default.Close, label(R.string.close))
                 }
             }
-            Text(state.selected?.title ?: note.title, Modifier.padding(horizontal = 22.dp, vertical = 4.dp),
+            // The read-only preview already renders its title. Keep the compact title for list/diff/loading only.
+            if (preview == null || comparing) Text(state.selected?.title ?: note.title,
+                Modifier.padding(horizontal = 22.dp, vertical = 4.dp),
                 style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (state.working) {
                 Row(Modifier.padding(horizontal = 22.dp, vertical = 8.dp),
@@ -161,7 +163,8 @@ fun NoteHistorySheet(
                     ?: label(R.string.history_unknown_date), Modifier.padding(horizontal = 22.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (state.selected.description.isNotBlank()) Text(state.selected.description,
-                    Modifier.padding(horizontal = 22.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium)
+                    Modifier.padding(horizontal = 22.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Text(label(R.string.history_read_only), Modifier.weight(1f),

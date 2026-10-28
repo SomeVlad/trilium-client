@@ -22,6 +22,23 @@ import ru.vlad.triliumnotes.data.SyncState
 /** Screen actions are tested here; body editing and HTML preservation use the editor harness. */
 class EditorScreenTest {
     @get:Rule val compose = createComposeRule()
+    @org.junit.Before fun selectRussian() {
+        ru.vlad.triliumnotes.AppLanguage.select(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext, "ru")
+    }
+
+    @Test fun readingFolderContentNeverOffersToDeleteTheWholeFolder() {
+        val document = syntheticNote("<p>Текст папки</p>").let {
+            it.copy(note = it.note.copy(childBranchIds = listOf("child-branch")))
+        }
+        compose.setContent { NotesTheme {
+            EditorScreen(NotesScreenState(document = document, loading = false), document, SyncState(),
+                onBack = {}, onTitleChanged = {}, onHtmlChanged = {}, onSync = {},
+                onKeepConflictAsCopy = {}, onDelete = {})
+        } }
+        compose.onNodeWithTag("note-actions-synthetic-note").performClick()
+        compose.onNodeWithTag("note-find").assertIsDisplayed()
+        compose.onNodeWithText("Удалить").assertDoesNotExist()
+    }
 
     @Test fun readOnlyProtectedNoteCanBeDeletedOnlyAfterConfirmation() {
         val document = syntheticNote("").let { it.copy(note = it.note.copy(isProtected = true)) }

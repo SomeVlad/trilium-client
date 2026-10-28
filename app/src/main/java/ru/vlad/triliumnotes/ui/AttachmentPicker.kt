@@ -100,6 +100,7 @@ fun AttachmentPicker(
     onCancelled: () -> Unit = {},
     preparePick: ((() -> Unit) -> Unit)? = null,
     controller: AttachmentPickerController? = null,
+    visible: Boolean = true,
 ) {
     val context = LocalContext.current
     var expanded by remember { mutableStateOf(false) }
@@ -108,7 +109,8 @@ fun AttachmentPicker(
         onPickStarted()
         if (preparePick != null) preparePick(launch) else launch()
     }
-    Box(modifier) {
+    // Receiving a system-picker result must outlive the editing toolbar that launched it.
+    if (visible) Box(modifier) {
         IconButton(onClick = { expanded = true }, enabled = enabled, modifier = Modifier.testTag("attach")) {
             Icon(Icons.Outlined.AttachFile, AppLanguage.get(context, R.string.action_attach))
         }

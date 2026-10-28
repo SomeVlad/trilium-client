@@ -10,8 +10,17 @@ import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
 import android.graphics.ImageDecoder
 import android.graphics.pdf.PdfRenderer
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaMuxer
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.util.Log
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+import android.view.inspector.WindowInspector
+import android.widget.VideoView
 import org.json.JSONArray
 import org.junit.Assume.assumeTrue
 import androidx.activity.compose.LocalActivityResultRegistryOwner
@@ -206,6 +215,93 @@ class AttachmentViewerTest {
         }.getOrDefault(false) }
         compose.onNodeWithTag("audio-play").assertDoesNotExist()
         compose.onNodeWithText("Открыть файл").assertIsDisplayed()
+    }
+
+    @Test fun nativeVideoPauseUpdatesExternalPlaybackButtonAndCanResume() {
+        val target = File(context.filesDir, "note-resources/video-control-qa/sample.mp4")
+        target.parentFile!!.mkdirs()
+        val source = file("short-video.mp4")
+        InstrumentationRegistry.getInstrumentation().context.assets.open("product-review/sample-video.mp4").use { input ->
+            source.outputStream().use { input.copyTo(it) }
+        }
+        // Give native-control interactions time to finish before the two-second source completes.
+        val extractor = MediaExtractor()
+        val muxer = MediaMuxer(target.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        try {
+            extractor.setDataSource(source.absolutePath)
+            val tracks = (0 until extractor.trackCount).map { track ->
+                extractor.selectTrack(track)
+                muxer.addTrack(extractor.getTrackFormat(track))
+            }
+            muxer.start()
+            val buffer = ByteBuffer.allocate(1024 * 1024)
+            val info = MediaCodec.BufferInfo()
+            while (extractor.sampleTrackIndex >= 0) {
+                buffer.clear()
+                val size = extractor.readSampleData(buffer, 0)
+                if (size < 0) break
+                info.set(0, size, extractor.sampleTime * 30, extractor.sampleFlags)
+                muxer.writeSampleData(tracks[extractor.sampleTrackIndex], buffer, info)
+                extractor.advance()
+            }
+            muxer.stop()
+        } finally {
+            extractor.release()
+            muxer.release()
+        }
+        compose.setContent { MaterialTheme {
+            AttachmentViewer(note("video-controls"), loader = { CachedAttachment(target, "video/mp4", "sample.mp4") })
+        } }
+        var video: VideoView? = null
+        compose.waitUntil(15_000) {
+            var ready = false
+            compose.runOnIdle {
+                video = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { root ->
+                    findNativeView(root) { it is VideoView } as? VideoView
+                }
+                ready = (video?.duration ?: 0) > 0
+            }
+            ready
+        }
+        compose.onNodeWithText("Воспроизвести").performClick()
+        compose.onNodeWithText("Пауза").assertIsDisplayed()
+        compose.runOnIdle {
+            val view = requireNotNull(video)
+            assertTrue(view.isPlaying)
+            val time = SystemClock.uptimeMillis()
+            for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                MotionEvent.obtain(time, time, action, view.width / 2f, view.height / 2f, 0).also {
+                    view.dispatchTouchEvent(it)
+                    it.recycle()
+                }
+            }
+        }
+        var nativePause: View? = null
+        compose.waitUntil(5_000) {
+            compose.runOnIdle {
+                nativePause = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { root ->
+                    findNativeView(root) { view ->
+                        view.isShown && runCatching { view.resources.getResourceEntryName(view.id) == "pause" }.getOrDefault(false)
+                    }
+                }
+            }
+            nativePause != null
+        }
+        compose.runOnIdle {
+            // Click the actual framework MediaController button, which calls VideoView.pause().
+            assertTrue(requireNotNull(nativePause).performClick())
+            assertTrue(!requireNotNull(video).isPlaying)
+        }
+        compose.onNodeWithText("Воспроизвести").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Пауза").assertIsDisplayed()
+        compose.runOnIdle { assertTrue(requireNotNull(video).isPlaying) }
+    }
+
+    private fun findNativeView(view: View, matches: (View) -> Boolean): View? {
+        if (matches(view)) return view
+        return if (view is ViewGroup) (0 until view.childCount).firstNotNullOfOrNull {
+            findNativeView(view.getChildAt(it), matches)
+        } else null
     }
 
     @Test fun failedDownloadCanBeRetried() {

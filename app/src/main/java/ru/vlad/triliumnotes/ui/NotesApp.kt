@@ -391,10 +391,6 @@ internal fun LibraryScreen(
                             Icon(Icons.Outlined.Settings, AppLanguage.get(context, R.string.connection_settings))
                         }
                     }
-                    if (!selectionMode && !collection && inFolder) state.currentFolderNote?.let { note ->
-                        NoteActionsMenu(note, onDelete?.let { { dismissKeyboard(); deleteTarget = note } },
-                            enabled = !busy && state.deletingNoteId == null)
-                    }
                     Box {
                         IconButton(onClick = { actionsExpanded = true }, enabled = !busy,
                             modifier = Modifier.testTag("library-actions")) {
@@ -408,11 +404,12 @@ internal fun LibraryScreen(
                                     DropdownMenuItem(text = { Text(AppLanguage.get(context, label)) }, enabled = selected.isNotEmpty(),
                                         onClick = { actionsExpanded = false; organize(action, selected) })
                                 }
-                                DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.delete), color = colors.error) }, enabled = selected.isNotEmpty(),
+                                DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.delete)) }, enabled = selected.isNotEmpty(),
+                                    colors = MenuDefaults.itemColors(textColor = colors.error),
                                     onClick = { actionsExpanded = false; bulkDelete = true })
                             } else {
-                                if (!searching && !collection && onTrashMany != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.library_select)) },
-                                    onClick = { selectionMode = true; actionsExpanded = false })
+                                if (!searching && !collection && onTrashMany != null && visibleNotes.any { it.canDelete }) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.library_select)) },
+                                    onClick = { dismissKeyboard(); selectionMode = true; actionsExpanded = false })
                                 if (!searching && !collection) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.library_sort)) },
                                     onClick = { actionsExpanded = false; sortExpanded = true })
                                 if (onTrash != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.library_trash)) },
@@ -431,7 +428,7 @@ internal fun LibraryScreen(
                                 onClick = { sortExpanded = false; showReorder = true })
                         }
                     }
-                    SyncStatusControl(sync, offline, state.networkAvailable, state.fromCache,
+                    if (!selectionMode) SyncStatusControl(sync, offline, state.networkAvailable, state.fromCache,
                         onRefresh = { dismissKeyboard(); onRefresh() },
                         isViewBusy = busy, viewError = state.error,
                         onOpenConflict = onOpenConflict?.let { openConflict -> { dismissKeyboard(); openConflict() } })
@@ -440,7 +437,7 @@ internal fun LibraryScreen(
             }
         },
         floatingActionButton = {
-            Box {
+            if (!selectionMode) Box {
                 FloatingActionButton(onClick = {
                     if (!busy && state.deletingNoteId == null) {
                         dismissKeyboard()
@@ -475,10 +472,10 @@ internal fun LibraryScreen(
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 100.dp)) {
             if (!inFolder && !searching && !selectionMode) {
                 item(key = "collections") {
-                    Row(Modifier.fillMaxWidth().padding(bottom = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(Modifier.fillMaxWidth().padding(bottom = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for ((section, label) in listOf(LibrarySection.NOTES to R.string.notes, LibrarySection.FAVORITES to R.string.library_favorites, LibrarySection.RECENT to R.string.library_recent)) {
                             FilterChip(selected = state.librarySection == section, onClick = { onSection(section) },
-                                label = { Text(AppLanguage.get(context, label)) }, modifier = Modifier.testTag("section-${section.name}"))
+                                label = { Text(AppLanguage.get(context, label), maxLines = 1) }, modifier = Modifier.testTag("section-${section.name}"))
                         }
                     }
                 }
@@ -489,7 +486,7 @@ internal fun LibraryScreen(
             if (offline.isRunning && !offline.available) {
                 item(key = "offline-progress") { InitialOfflineProgress(offline, Modifier.padding(bottom = 12.dp)) }
             }
-            item(key = "search") {
+            if (!selectionMode) item(key = "search") {
                 TextField(value = state.query, onValueChange = onSearch,
                     modifier = Modifier.fillMaxWidth().testTag("note-search"), singleLine = true,
                     placeholder = { Text(AppLanguage.get(context, R.string.search_all_notes), style = MaterialTheme.typography.bodyMedium) },
@@ -566,7 +563,7 @@ internal fun LibraryScreen(
                         deleteEnabled = !state.operationBusy && state.deletingNoteId == null,
                         selected = if (selectionMode) item.note.id in selectedIds else null,
                         onSelect = { toggleSelected(item.note.id) },
-                        onLongSelect = if (onTrashMany != null) ({ selectionMode = true; toggleSelected(item.note.id) }) else null,
+                        onLongSelect = if (onTrashMany != null) ({ dismissKeyboard(); selectionMode = true; toggleSelected(item.note.id) }) else null,
                         favorite = item.note.id in preferences.favorites, onFavorite = onFavorite?.let { { it(item.note.id) } },
                         onOrganize = onOrganize?.let { { action -> organize(action, listOf(item.note)) } })
                 }
@@ -583,7 +580,11 @@ internal fun LibraryScreen(
     if (bulkDelete) AlertDialog(onDismissRequest = { bulkDelete = false },
         title = { Text(AppLanguage.get(context, R.string.library_trash_title)) },
         text = { Text(AppLanguage.get(context, R.string.library_bulk_trash_message, selected.size)) },
-        confirmButton = { TextButton(onClick = { bulkDelete = false; onTrashMany?.invoke(selected); selectionMode = false; selectedIds = emptyList() }) { Text(AppLanguage.get(context, R.string.library_trash)) } },
+        confirmButton = { TextButton(enabled = selected.isNotEmpty() && !busy, modifier = Modifier.testTag("confirm-delete-selected"),
+            colors = ButtonDefaults.textButtonColors(contentColor = colors.error),
+            onClick = { bulkDelete = false; onTrashMany?.invoke(selected); selectionMode = false; selectedIds = emptyList() }) {
+            Text(AppLanguage.get(context, R.string.delete))
+        } },
         dismissButton = { TextButton(onClick = { bulkDelete = false }) { Text(AppLanguage.get(context, R.string.cancel)) } })
     if (showFolderDialog) {
         val titleFocus = remember { FocusRequester() }
@@ -743,9 +744,11 @@ internal fun EditorScreen(
         (document.note.type == "text" && document.note.mime.substringBefore(';') == "text/html")
     val attachment = document.note.type == "image" || document.note.type == "file"
     val readOnly = !document.note.isEditable
+    val folderContent = document.note.type == "book" || document.note.childBranchIds.isNotEmpty()
     val conflict = document.conflict || document.note.id in sync.conflicts
     val localSaveFailed = state.localWritePending && state.localSaveFailed
     var editing by rememberSaveable(document.note.id) { mutableStateOf(state.newNoteId == document.note.id && !readOnly) }
+    val diagram = !document.note.isProtected && (document.note.type == "canvas" || (document.note.type == "mermaid" && !editing))
     // Only this newly created, untouched title can hide the server's generated fallback.
     // Existing titles are user content and always pass through unchanged.
     val untouchedNewTitle = state.newNoteId == document.note.id && state.newNoteTitleUntouched
@@ -816,14 +819,17 @@ internal fun EditorScreen(
         modifier = Modifier.imePadding(),
         topBar = {
             TopAppBar(title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    if (diagram) Text(document.note.title.ifBlank { AppLanguage.get(context, R.string.untitled) },
+                        style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("diagram-title"))
                     val status = when {
                         localSaveFailed -> AppLanguage.get(context, R.string.not_saved)
                         flushing || state.localWritePending -> AppLanguage.get(context, R.string.saving)
                         conflict -> AppLanguage.get(context, R.string.another_version)
                         document.note.isProtected -> AppLanguage.get(context, R.string.kind_protected)
                         readOnly && htmlNote -> AppLanguage.get(context, R.string.read_only)
-                        readOnly && !attachment -> noteKind(context, document.note)
+                        readOnly && !attachment && !diagram -> noteKind(context, document.note)
                         else -> ""
                     }
                     if (status.isNotEmpty()) Text(status, style = MaterialTheme.typography.labelSmall,
@@ -847,6 +853,7 @@ internal fun EditorScreen(
                 }
                 if (canAttach && (onAttachment != null || onAttachmentAtCursor != null)) {
                     AttachmentPicker(enabled = !flushing && !state.operationBusy && !state.uploadStaging && state.deletingNoteId == null,
+                        visible = editing,
                         onPickStarted = { onAttachmentPickStarted(); closeSearch() },
                         preparePick = { launch ->
                             if (editing && onAttachmentAtCursor != null) {
@@ -881,7 +888,7 @@ internal fun EditorScreen(
                     }
                 }
                 NoteActionsMenu(document.note,
-                    onDelete = if (!editing) onDelete?.let { { showDeleteConfirmation = true } } else null,
+                    onDelete = if (!editing && !folderContent) onDelete?.let { { showDeleteConfirmation = true } } else null,
                     enabled = !flushing && !state.operationBusy && state.deletingNoteId == null,
                     deleteEnabled = !state.localWritePending,
                     onSearch = if (searchable) ({ finishEditing { searchVisible = true } }) else null,
@@ -918,7 +925,7 @@ internal fun EditorScreen(
                     modifier = Modifier.padding(horizontal = 20.dp))
             }
             key(document.note.id, state.editorEpoch) {
-                if (!document.note.isProtected && (document.note.type == "canvas" || (document.note.type == "mermaid" && !editing))) {
+                if (diagram) {
                     DiagramViewer(document.note.id, document.note.type, document.html, Modifier.fillMaxWidth().weight(1f))
                 } else if (document.note.isProtected || (readOnly && !htmlNote && !attachment)) {
                     SpecialNoteContent(document.note, initialHtml, onOpenLink, Modifier.fillMaxWidth().weight(1f), serverUrl)
@@ -1016,8 +1023,9 @@ private fun NoteActionsMenu(
                 DropdownMenuItem(text = { Text(AppLanguage.get(context, label)) }, enabled = deleteEnabled,
                     onClick = { expanded = false; onOrganize(action) })
             }
-            if (hasDelete) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.delete), color = MaterialTheme.colorScheme.error) },
-                leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error) }, enabled = deleteEnabled,
+            if (hasDelete) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.delete)) },
+                colors = MenuDefaults.itemColors(textColor = MaterialTheme.colorScheme.error, leadingIconColor = MaterialTheme.colorScheme.error),
+                leadingIcon = { Icon(Icons.Outlined.Delete, null) }, enabled = deleteEnabled,
                 onClick = { expanded = false; onDelete?.invoke() })
         }
     }

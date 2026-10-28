@@ -181,15 +181,14 @@ class ProductScreenshotMatrixTest {
             editor("30-documentation", "Справка Trilium: только чтение", 30,
                 doc("qa_docs", "Справка: заметки и связи", "<h2>Заметки и связи</h2><p>Справочная информация Trilium доступна для чтения.</p><ul><li>Дерево заметок</li><li>Клоны и связи</li></ul>", "doc")),
             editor("31-service-empty", "Служебный раздел без текстового документа", 31, doc("qa_service", "Рабочая панель", "", "contentWidget", "application/json")),
-            editor("32-mermaid-source", "Mermaid: фактический source fallback", 32,
+            editor("32-mermaid-source", "Mermaid: готовая диаграмма", 32,
                 doc("qa_mermaid", "Путь заметки", "graph TD\n  Idea[Идея] --> Draft[Черновик]\n  Draft --> Saved[Сохранено]", "mermaid", "text/plain")),
-            editor("33-canvas-source", "Непустой холст: фактический source fallback", 33,
-                doc("qa_canvas", "Холст идей", "{\n  \"nodes\": [{\"id\": \"idea\", \"text\": \"Новая идея\"}],\n  \"edges\": []\n}", "canvas", "application/json")),
+            editor("33-canvas-source", "Непустой холст: готовый рисунок", 33,
+                doc("qa_canvas", "Холст идей", """{"type":"excalidraw","version":2,"elements":[{"id":"idea","type":"rectangle","x":20,"y":20,"width":280,"height":160,"angle":0,"strokeColor":"#1e1e1e","backgroundColor":"#b2f2bb","fillStyle":"solid","strokeWidth":2,"strokeStyle":"solid","roughness":1,"opacity":100,"groupIds":[],"frameId":null,"seed":1,"version":1,"versionNonce":1,"isDeleted":false,"boundElements":[],"updated":1,"link":null,"locked":false}],"appState":{},"files":{}}""", "canvas", "application/json")),
             editor("34-relation-map-source", "Непустая карта связей: source fallback", 34,
                 doc("qa_relations", "Связи проекта", "{\n  \"notes\": [\"Планы\", \"Материалы\"],\n  \"relations\": [{\"from\": \"Планы\", \"to\": \"Материалы\"}]\n}", "relationMap", "application/json")),
         )
         return shots + listOf(
-            shots.first { it.id == "33-canvas-source" }.copy(id = "33b-canvas-source-expanded", title = "Холст: раскрытый точный исходный JSON", action = Action.SPECIAL_SOURCE),
             shots.first { it.id == "34-relation-map-source" }.copy(id = "34b-relations-source-expanded", title = "Карта связей: раскрытый точный исходный JSON", action = Action.SPECIAL_SOURCE),
         )
     }
@@ -303,6 +302,9 @@ class ProductScreenshotMatrixTest {
     }
 
     private fun prepare(shot: Shot) {
+        if (shot.document?.note?.type in setOf("mermaid", "canvas")) {
+            waitWeb { "Boolean(window.diagram?.ready && !window.diagram.error && document.querySelector('#surface svg'))" }
+        }
         if (shot.document != null && shot.attachment == null && !shot.document.note.isProtected &&
             (shot.document.note.type == "doc" || shot.document.note.type == "text")) {
             waitWeb { "Boolean(window.pocket?.ready)" }

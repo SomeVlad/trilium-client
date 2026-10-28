@@ -27,7 +27,7 @@
     <string name="library_restore_parent">"Сначала восстановите родительскую папку"</string>
     <string name="library_trash_title">"Переместить в корзину?"</string>
     <string name="library_trash_message">"Заметку можно восстановить из корзины. Удаление затронет её клоны и вложенные заметки без других родителей."</string>
-    <string name="library_bulk_trash_message">"Выбранные заметки (%1$d) будут перемещены в корзину вместе с потомками без других родителей."</string>
+    <string name="library_bulk_trash_message">"Выбранные заметки (%1$d) будут удалены из всех папок, где они находятся. Вложенные заметки без других родителей тоже попадут в корзину."</string>
     <string name="library_save_order">"Сохранить порядок"</string>
     <string name="library_empty_favorites">"Добавьте заметку в избранное через её меню"</string>
     <string name="library_empty_recent">"Здесь появятся открытые заметки"</string>

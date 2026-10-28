@@ -8,6 +8,7 @@
     <string name="capture_note_title">Название заметки</string>
     <string name="capture_root">Корневая папка</string>
     <string name="capture_select_note">Выберите заметку</string>
+    <string name="capture_find_target">Найти по названию или пути</string>
     <string name="capture_destination_note">Заметка</string>
     <string name="capture_destination_folder">Папка для новой заметки</string>
     <string name="capture_save">Сохранить</string>

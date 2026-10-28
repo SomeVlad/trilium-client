@@ -27,7 +27,7 @@
     <string name="library_restore_parent">"Restore the parent folder first"</string>
     <string name="library_trash_title">"Move to trash?"</string>
     <string name="library_trash_message">"You can restore the note from trash. This also affects its clones and child notes with no other parents."</string>
-    <string name="library_bulk_trash_message">"Selected notes (%1$d) will move to trash along with descendants that have no other parents."</string>
+    <string name="library_bulk_trash_message">"The selected notes (%1$d) will be removed from every folder they appear in. Child notes with no other parent will also move to trash."</string>
     <string name="library_save_order">"Save order"</string>
     <string name="library_empty_favorites">"Add a note to favorites from its menu"</string>
     <string name="library_empty_recent">"Notes you open will appear here"</string>

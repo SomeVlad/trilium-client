@@ -24,7 +24,9 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -37,18 +39,21 @@ import ru.vlad.triliumnotes.data.OfflineState
 import ru.vlad.triliumnotes.data.NoteMeta
 import ru.vlad.triliumnotes.data.SyncState
 import ru.vlad.triliumnotes.data.TreeItem
+import ru.vlad.triliumnotes.data.LibrarySection
 
 class LibraryScreenTest {
     @get:Rule val compose = createComposeRule()
+    @org.junit.Before fun selectRussian() {
+        ru.vlad.triliumnotes.AppLanguage.select(InstrumentationRegistry.getInstrumentation().targetContext, "ru")
+    }
 
-    @Test fun folderDeletionExplainsDescendantsAndCancellationDoesNothing() {
+    @Test fun folderDeletionFromParentRowExplainsDescendantsAndCancellationDoesNothing() {
         val folder = note("folder", "Книги", listOf("branch"))
         val deleted = mutableListOf<NoteMeta>()
         compose.setContent {
             NotesTheme {
                 LibraryScreen(NotesScreenState(loading = false,
-                    folders = listOf(Folder("root", "Заметки"), Folder(folder.id, folder.title)),
-                    currentFolderNote = folder), SyncState(), onBack = {}, onSearch = {}, onRefresh = {},
+                    items = listOf(TreeItem("branch", folder, "", 0, false))), SyncState(), onBack = {}, onSearch = {}, onRefresh = {},
                     onSync = {}, onCreate = {}, onOpen = {}, onFolder = {}, onOpenFolderContent = {},
                     onDelete = { deleted += it })
             }
@@ -64,6 +69,90 @@ class LibraryScreenTest {
         compose.onNodeWithText("Удалить").performClick()
         compose.onNodeWithTag("confirm-delete-note").performClick()
         compose.runOnIdle { assertEquals(listOf(folder), deleted) }
+    }
+
+    @Test fun folderMenuRetainsListActionsAndDeletionOnlyTargetsSelectedChildren() {
+        val folder = note("folder", "Книги", listOf("branch"))
+        val child = note("child", "Заметка внутри")
+        var trashOpens = 0
+        var captureOpens = 0
+        val deleted = mutableListOf<NoteMeta>()
+        val deletedSelections = mutableListOf<List<NoteMeta>>()
+        compose.setContent {
+            NotesTheme {
+                LibraryScreen(NotesScreenState(loading = false,
+                    folders = listOf(Folder("root", "Заметки"), Folder(folder.id, folder.title)),
+                    currentFolderNote = folder,
+                    items = listOf(TreeItem("child-branch", child, "", 0, false))), SyncState(),
+                    onBack = {}, onSearch = {}, onRefresh = {}, onSync = {}, onCreate = {},
+                    onOpen = {}, onFolder = {}, onOpenFolderContent = {}, onDelete = { deleted += it },
+                    onTrashMany = { deletedSelections += it }, onTrash = { trashOpens++ },
+                    captureCount = 2, onCaptures = { captureOpens++ })
+            }
+        }
+        compose.onNodeWithTag("library-actions").performClick()
+        compose.onNodeWithText("Выбрать заметки").assertIsDisplayed()
+        compose.onNodeWithText("Сортировка").assertIsDisplayed()
+        compose.onNodeWithTag("note-actions-folder").assertDoesNotExist()
+        compose.onNodeWithText("Удалить").assertDoesNotExist()
+        compose.onNodeWithText("Корзина").performClick()
+        compose.onNodeWithTag("library-actions").performClick()
+        compose.onNodeWithText("Полученные (2)").performClick()
+        compose.onNodeWithTag("library-actions").performClick()
+        compose.onNodeWithText("Выбрать заметки").performClick()
+        compose.onNodeWithTag("create-note").assertDoesNotExist()
+        compose.onNodeWithTag("note-search").assertDoesNotExist()
+        compose.onNodeWithTag("sync-status").assertDoesNotExist()
+        compose.onNodeWithTag("section-NOTES").assertDoesNotExist()
+        compose.onNodeWithTag("note-row-child").performClick()
+        compose.onNodeWithTag("library-actions").performClick()
+        compose.onNodeWithTag("note-actions-folder").assertDoesNotExist()
+        compose.onNodeWithText("Переместить").assertIsDisplayed()
+        compose.onNodeWithText("Создать копию").assertIsDisplayed()
+        compose.onNodeWithText("Добавить в другую папку").assertIsDisplayed()
+        compose.onNodeWithText("Удалить").performClick()
+        compose.onNodeWithText("Выбранные заметки (1) будут удалены из всех папок, где они находятся. Вложенные заметки без других родителей тоже попадут в корзину.").assertIsDisplayed()
+        compose.onNodeWithText("Отмена").performClick()
+        compose.runOnIdle { assertTrue(deletedSelections.isEmpty()) }
+        compose.onNodeWithTag("library-actions").performClick()
+        compose.onNodeWithText("Удалить").performClick()
+        compose.onNodeWithTag("confirm-delete-selected").performClick()
+        compose.runOnIdle {
+            assertEquals(1, trashOpens)
+            assertEquals(1, captureOpens)
+            assertTrue(deleted.isEmpty())
+            assertEquals(listOf(listOf(child)), deletedSelections)
+        }
+    }
+
+    @Test fun currentFolderNeverHasAnActionMenuInFolderRootSearchOrCollections() {
+        val folder = note("folder", "Книги", listOf("branch"))
+        val nested = NotesScreenState(loading = false,
+            folders = listOf(Folder("root", "Заметки"), Folder(folder.id, folder.title)),
+            currentFolderNote = folder)
+        var state by mutableStateOf(nested)
+        compose.setContent {
+            NotesTheme {
+                LibraryScreen(state, SyncState(), onBack = {}, onSearch = {}, onRefresh = {},
+                    onSync = {}, onCreate = {}, onOpen = {}, onFolder = {}, onOpenFolderContent = {},
+                    onDelete = {}, onTrash = {})
+            }
+        }
+        for (scope in listOf(
+            nested,
+            nested.copy(folders = listOf(Folder("root", "Заметки")), currentFolderNote = note("root", "Заметки")),
+            nested.copy(query = "Книги"),
+            nested.copy(librarySection = LibrarySection.FAVORITES),
+            nested.copy(currentFolderNote = note("_hidden", "Служебная папка")),
+            nested.copy(deletingNoteId = folder.id),
+        )) {
+            compose.runOnIdle { state = scope }
+            compose.onAllNodesWithTag("library-actions").assertCountEquals(1)
+            compose.onNodeWithTag("note-actions-${scope.currentFolderNote!!.id}").assertDoesNotExist()
+            compose.onNodeWithTag("library-actions").performClick()
+            compose.onNodeWithText("Удалить").assertDoesNotExist()
+            compose.onNodeWithText("Корзина").performClick()
+        }
     }
 
     @Test fun searchAttachmentDeletionDoesNotOpenTheFileAndProtectsSystemNotes() {

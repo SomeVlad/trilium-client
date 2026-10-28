@@ -404,7 +404,16 @@ private fun MediaAttachment(attachment: CachedAttachment) {
         Text(AppLanguage.get(context, R.string.media_play_error), Modifier.padding(22.dp))
     } else Column(Modifier.fillMaxSize()) {
         AndroidView(factory = { ctx ->
-            VideoView(ctx).apply {
+            object : VideoView(ctx) {
+                override fun start() {
+                    super.start()
+                    playing = true
+                }
+                override fun pause() {
+                    super.pause()
+                    playing = false
+                }
+            }.apply {
                 player = this
                 val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", attachment.file)
                 setVideoURI(uri)
@@ -417,7 +426,6 @@ private fun MediaAttachment(attachment: CachedAttachment) {
         Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center) {
             FilledTonalButton(enabled = !failed, onClick = {
                 if (playing) player?.pause() else player?.start()
-                playing = !playing
             }) { Icon(if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, null); Text(if (playing) AppLanguage.get(context, R.string.pause) else AppLanguage.get(context, R.string.play)) }
         }
     }

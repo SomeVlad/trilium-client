@@ -2,4 +2,5 @@
 <resources>
     <string name="editor_note_title">Название заметки</string>
     <string name="editor_source_text">Исходный текст</string>
+    <string name="editor_attachment_actions">Действия с вложением «%1$s»</string>
 </resources>

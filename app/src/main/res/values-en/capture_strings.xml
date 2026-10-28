@@ -8,6 +8,7 @@
     <string name="capture_note_title">Note title</string>
     <string name="capture_root">Root folder</string>
     <string name="capture_select_note">Choose a note</string>
+    <string name="capture_find_target">Find by title or path</string>
     <string name="capture_destination_note">Note</string>
     <string name="capture_destination_folder">Folder for new note</string>
     <string name="capture_save">Save</string>

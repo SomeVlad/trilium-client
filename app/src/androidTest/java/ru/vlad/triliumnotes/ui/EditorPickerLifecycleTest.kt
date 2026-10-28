@@ -66,11 +66,13 @@ class EditorPickerLifecycleTest {
                                 assertFalse(inline)
                                 deliveredOwner = capturedOwner
                                 deliveredUri = uri
-                            }, onEditingChanged = { assertFalse(it); editingEvents.incrementAndGet() })
+                            }, onEditingChanged = { editingEvents.incrementAndGet() })
                     }
                 }
             }
         }
+        compose.onNodeWithTag("attach").assertDoesNotExist()
+        compose.onNodeWithContentDescription(AppLanguage.get(context, R.string.edit_note)).performClick()
         val initialEditingEvents = editingEvents.get()
         compose.onNodeWithTag("attach").performClick()
         compose.onNodeWithText(AppLanguage.get(context, R.string.action_attach_file)).performClick()
@@ -81,14 +83,16 @@ class EditorPickerLifecycleTest {
             state = state.copy(editorEpoch = state.editorEpoch + 1)
         }
         compose.waitForIdle()
-        compose.onNodeWithTag("attach").assertIsDisplayed()
+        compose.onNodeWithTag("attach").assertDoesNotExist()
         compose.onNodeWithContentDescription(AppLanguage.get(context, R.string.edit_note)).assertIsDisplayed()
+        val writesBeforeDelivery = writes.get()
         compose.runOnIdle {
             registry.dispatchResult(requireNotNull(pickerRequest), Activity.RESULT_OK, Intent().setData(expectedUri))
         }
         compose.waitUntil(5_000) { deliveredUri != null }
         assertEquals(expectedUri, deliveredUri)
         assertEquals("ownerAAAA", deliveredOwner)
-        assertEquals(0, writes.get())
+        // Switching to editing can emit the normalized editor body; a late picker result must not write it again.
+        assertEquals(writesBeforeDelivery, writes.get())
     }
 }

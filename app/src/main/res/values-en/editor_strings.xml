@@ -2,4 +2,5 @@
 <resources>
     <string name="editor_note_title">Note title</string>
     <string name="editor_source_text">Source text</string>
+    <string name="editor_attachment_actions">Actions for attachment “%1$s”</string>
 </resources>

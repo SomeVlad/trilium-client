@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import ru.vlad.triliumnotes.AppLanguage
 import ru.vlad.triliumnotes.R
 import ru.vlad.triliumnotes.data.NoteMeta
@@ -29,13 +30,14 @@ data class NoteDestination(val note: NoteMeta, val path: String)
 fun DestinationDialog(title: String, destinations: List<NoteDestination>, onPick: (NoteMeta) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, modifier = Modifier.testTag("destination-dialog"),
+    AlertDialog(onDismissRequest = onDismiss, modifier = Modifier.statusBarsPadding().navigationBarsPadding().imePadding().testTag("destination-dialog"),
+        properties = DialogProperties(decorFitsSystemWindows = false),
         title = { Text(title) }, text = {
-            Column {
+            Column(Modifier.heightIn(max = 380.dp)) {
                 OutlinedTextField(query, { query = it }, singleLine = true,
-                    placeholder = { Text(AppLanguage.get(context, R.string.search_all_notes)) }, modifier = Modifier.fillMaxWidth())
+                    placeholder = { Text(AppLanguage.get(context, R.string.search_all_notes)) }, modifier = Modifier.fillMaxWidth().testTag("destination-query"))
                 Spacer(Modifier.height(8.dp))
-                LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                LazyColumn(Modifier.weight(1f, fill = false).testTag("destination-list")) {
                     val matches = destinations.filter { it.note.title.contains(query, true) || it.path.contains(query, true) }
                     if (matches.isEmpty()) item { Text(AppLanguage.get(context, R.string.library_no_destinations), Modifier.padding(vertical = 16.dp)) }
                     items(matches, key = { it.note.id }) { destination ->
@@ -49,7 +51,7 @@ fun DestinationDialog(title: String, destinations: List<NoteDestination>, onPick
                     }
                 }
             }
-        }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text(AppLanguage.get(context, R.string.cancel)) } })
+        }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss, modifier = Modifier.testTag("destination-cancel")) { Text(AppLanguage.get(context, R.string.cancel)) } })
 }
 
 @Composable
