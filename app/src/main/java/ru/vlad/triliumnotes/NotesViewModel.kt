@@ -2,6 +2,12 @@ package ru.vlad.triliumnotes
 
 import android.app.Application
 import android.net.Uri
+import ru.vlad.triliumnotes.data.*
+import ru.vlad.triliumnotes.capture.*
+import ru.vlad.triliumnotes.ui.LibraryAction
+import ru.vlad.triliumnotes.ui.NoteDestination
+import java.util.UUID
+import org.jsoup.nodes.Entities
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -62,6 +68,7 @@ data class NotesScreenState(
     val editorEpoch: Long = 0,
     val operationBusy: Boolean = false,
     val uploadStaging: Boolean = false,
+    val librarySection: LibrarySection = LibrarySection.NOTES,
 )
 
 class NotesViewModel(application: Application,
@@ -77,6 +84,17 @@ class NotesViewModel(application: Application,
     val state = mutable.asStateFlow()
     val syncState = repository.syncState
     val uploadState = services.uploads.state
+    val attachmentEditState = services.attachments.state
+    val libraryPreferences = services.libraryPreferences.state
+    val accountId = accountIdFor(services.serverUrl)
+    private val mutableTrash = MutableStateFlow<List<TrashItem>?>(null)
+    val trashState = mutableTrash.asStateFlow()
+    private val mutableAttachments = MutableStateFlow<List<AttachmentMeta>?>(null)
+    val attachmentList = mutableAttachments.asStateFlow()
+    var attachmentListOwner: String? = null
+        private set
+    private val mutablePanelError = MutableStateFlow<String?>(null)
+    val panelError = mutablePanelError.asStateFlow()
     private val history = NoteHistory(services.api)
     private val mutableHistory = MutableStateFlow<NoteHistoryState?>(null)
     val historyState = mutableHistory.asStateFlow()
@@ -87,6 +105,21 @@ class NotesViewModel(application: Application,
     private val insertionHandler: suspend (PendingAttachmentUpload, AttachmentMeta) -> Unit = { upload, attachment ->
         applyUploadedAttachment(upload, attachment)
     }
+    private val metadataSyncGate: suspend (suspend () -> Unit) -> Unit = { operation ->
+        withContext(Dispatchers.Main.immediate) {
+            if (editingNoteId != null || mutable.value.localWritePending || mutable.value.operationBusy ||
+                mutable.value.openingNoteId != null || mutable.value.deletingNoteId != null) throw AttachmentInsertionDeferred()
+            mutable.update { it.copy(operationBusy = true) }
+            try { withContext(Dispatchers.IO) { operation() } }
+            finally {
+                val current = mutable.value.document
+                val saved = current?.let { repository.cachedNote(it.note.id) }
+                if (saved != null && current != null && (saved.html != current.html || saved.note.title != current.note.title))
+                    mutable.update { it.copy(document = saved, editorEpoch = it.editorEpoch + 1) }
+                mutable.update { it.copy(operationBusy = false) }
+            }
+        }
+    }
     fun loadResource(path: String): ResourceContent? = resources.load(path)
     suspend fun loadAttachment(note: NoteMeta): CachedAttachment = resources.loadNote(note)
     suspend fun loadLinkedAttachment(path: String): CachedAttachment = resources.loadLinkedAttachment(path)
@@ -94,6 +127,8 @@ class NotesViewModel(application: Application,
     private var searchJob: Job? = null
     private var openJob: Job? = null
     private var syncJob: Job? = null
+    private var activeSyncJob: Job? = null
+    private var syncRequested = false
     private var editVersion = 0L
     private var navigationVersion = 0L
     private val noteHistory = mutableListOf<NoteMeta>()
@@ -104,6 +139,7 @@ class NotesViewModel(application: Application,
 
     init {
         services.attachmentInsertionHandler = insertionHandler
+        services.attachments.syncGate = metadataSyncGate
         viewModelScope.launch {
             for (draft in writes) {
                 try {
@@ -209,7 +245,7 @@ class NotesViewModel(application: Application,
 
     fun refreshCurrentView() {
         val current = mutable.value
-        if (current.deletingNoteId != null) return
+        if (current.deletingNoteId != null || current.operationBusy) return
         if (current.document != null) {
             if (!current.localWritePending) open(current.document.note, preserveHistory = true, forceRefresh = true)
         } else if (current.query.isNotBlank()) search(current.query)
@@ -223,7 +259,8 @@ class NotesViewModel(application: Application,
         navigationVersion++
         openJob?.cancel()
         searchJob?.cancel()
-        mutable.update { it.copy(folders = it.folders + Folder(note.id, note.title), query = "", results = emptyList(), items = emptyList(), currentFolderNote = note, currentFolderHasContent = null, searching = false, openingNoteId = null, error = null, fromCache = false) }
+        mutable.update { it.copy(librarySection = LibrarySection.NOTES, folders = it.folders + Folder(note.id, note.title), query = "", results = emptyList(), items = emptyList(), currentFolderNote = note, currentFolderHasContent = null, searching = false, openingNoteId = null, error = null, fromCache = false) }
+        recordOpened(note.id)
         refreshFolder()
     }
 
@@ -248,6 +285,9 @@ class NotesViewModel(application: Application,
             refreshCurrentView()
             syncNow()
         } else if (mutable.value.query.isNotEmpty()) search("")
+        else if (mutable.value.librarySection != LibrarySection.NOTES) {
+            mutable.update { it.copy(librarySection = LibrarySection.NOTES) }
+        }
         else if (mutable.value.folders.size > 1) {
             navigationVersion++
             mutable.update { it.copy(folders = it.folders.dropLast(1), items = emptyList(), currentFolderHasContent = null, error = null, fromCache = false) }
@@ -292,6 +332,7 @@ class NotesViewModel(application: Application,
         // its editor; pending drafts remain authoritative on either path.
         if (cached != null && (!forceRefresh || cached.pending || !networkAvailable)) {
             mutable.update { it.copy(document = cached, loading = false, error = null, localWritePending = false, openingNoteId = null) }
+            if (!forceRefresh) recordOpened(note.id)
             return
         }
         mutable.update { it.copy(document = null, loading = true, error = null, localWritePending = false, openingNoteId = note.id) }
@@ -301,6 +342,7 @@ class NotesViewModel(application: Application,
                 val document = repository.load(note.id)
                 if (request == navigationVersion && editVersion == editAtOpen) {
                     mutable.update { it.copy(document = document, loading = false, openingNoteId = null) }
+                    if (!forceRefresh) recordOpened(note.id)
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -389,7 +431,7 @@ class NotesViewModel(application: Application,
         mutable.update { it.copy(deletingNoteId = note.id, error = null) }
         viewModelScope.launch {
             try {
-                repository.delete(note.id)
+                repository.trash(note.id)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 mutable.update { it.copy(deletingNoteId = null, loading = false, searching = false,
@@ -463,15 +505,25 @@ class NotesViewModel(application: Application,
         syncJob = viewModelScope.launch { delay(1_200); syncNow() }
     }
 
-    fun syncNow() { viewModelScope.launch { performSync() } }
+    fun syncNow() {
+        syncRequested = true
+        if (activeSyncJob?.isActive == true) return
+        activeSyncJob = viewModelScope.launch {
+            do { syncRequested = false; performSync() } while (syncRequested)
+        }
+    }
 
     private suspend fun performSync() {
+        services.uploads.refreshPendingCount()
+        services.attachments.refreshPendingCount()
         if (syncState.value.isSyncing) return
-        if (syncState.value.pendingCount <= syncState.value.conflicts.size && uploadState.value.pendingCount == 0) return
+        if (syncState.value.pendingCount <= syncState.value.conflicts.size && uploadState.value.pendingCount == 0 && attachmentEditState.value.pendingCount == 0) return
         val pendingBefore = syncState.value.pendingCount
         try {
             repository.syncPending()
             services.uploads.syncPending()
+            // Rewriting attachment references must not race a buffer owned by the editor.
+            if (editingNoteId == null && !mutable.value.localWritePending && !mutable.value.operationBusy) services.attachments.syncPending()
             val result = repository.syncPending()
             val current = mutable.value.document
             if (current != null && !mutable.value.localWritePending) {
@@ -527,7 +579,7 @@ class NotesViewModel(application: Application,
     fun clearError() { mutable.update { it.copy(error = null) } }
 
     private fun schedulePendingChanges() {
-        if (syncState.value.pendingCount > syncState.value.conflicts.size || uploadState.value.pendingCount > 0)
+        if (syncState.value.pendingCount > syncState.value.conflicts.size || uploadState.value.pendingCount > 0 || attachmentEditState.value.pendingCount > 0)
             NotesSyncScheduler.schedulePending(getApplication())
     }
 
@@ -539,19 +591,28 @@ class NotesViewModel(application: Application,
         }
     }
 
-    fun stageAttachment(noteId: String, uri: Uri, inlineImage: Boolean) {
-        if (mutable.value.uploadStaging || mutable.value.operationBusy || mutable.value.deletingNoteId != null) return
+    fun stageAttachment(noteId: String, uri: Uri, inlineImage: Boolean, insertionAnchor: String? = null, onStaged: (Boolean) -> Unit = {}) {
+        if (mutable.value.uploadStaging) return
         mutable.update { it.copy(uploadStaging = true, error = null) }
         viewModelScope.launch {
+            var staged = false
             try {
+                withTimeout(30_000) { state.first { !it.operationBusy && it.deletingNoteId == null } }
                 awaitLocalWrites()
-                services.uploads.stage(uri, noteId, inlineImage)
+                services.uploads.stage(uri, noteId, inlineImage, insertionAnchor)
+                staged = true
+                val segments = uri.pathSegments
+                if (uri.scheme == "content" && uri.authority == "${getApplication<Application>().packageName}.files" &&
+                    segments.size == 2 && segments[0] == "capture_inbox" &&
+                    segments[1].matches(Regex("camera-[0-9a-fA-F-]{36}\\.jpg"))) {
+                    withContext(Dispatchers.IO) { java.io.File(getApplication<Application>().filesDir, "capture-inbox/${segments[1]}").delete() }
+                }
                 NotesSyncScheduler.schedulePending(getApplication())
                 syncNow()
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 mutable.update { it.copy(error = text(R.string.msg_upload_failed)) }
-            } finally { mutable.update { it.copy(uploadStaging = false) } }
+            } finally { mutable.update { it.copy(uploadStaging = false) }; onStaged(staged) }
         }
     }
 
@@ -574,6 +635,38 @@ class NotesViewModel(application: Application,
     private suspend fun awaitLocalWrites() {
         val current = withTimeout(10_000) { state.first { !it.localWritePending || it.localSaveFailed } }
         check(!current.localSaveFailed && !current.localWritePending) { "Local draft is not saved" }
+    }
+
+    fun prepareAttachmentPick(ready: () -> Unit, failed: () -> Unit) {
+        viewModelScope.launch {
+            try { awaitLocalWrites(); ready() }
+            catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutable.update { it.copy(error = text(R.string.msg_local_save_failed)) }
+                failed()
+            }
+        }
+    }
+
+    fun cleanupAttachmentAnchors(noteId: String, activePicker: String?) {
+        if (editingNoteId != null || mutable.value.operationBusy || mutable.value.localWritePending || mutable.value.uploadStaging) return
+        val current = repository.cachedNote(noteId) ?: return
+        if (!current.note.isEditable || !current.html.contains("#pocket-upload-")) return
+        mutable.update { it.copy(operationBusy = true) }
+        viewModelScope.launch {
+            try {
+                val active = services.uploads.pendingAnchors() + listOfNotNull(activePicker)
+                val body = clearAbandonedAttachmentPlaceholders(current.html, active, current.note.mime.contains("markdown", true))
+                if (body != current.html) {
+                    val document = repository.saveDraft(noteId, current.note.title, body)
+                    mutable.update { if (it.document?.note?.id == noteId) it.copy(document = document, editorEpoch = it.editorEpoch + 1) else it }
+                    schedulePendingChanges()
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutable.update { it.copy(error = text(R.string.msg_local_save_failed)) }
+            } finally { mutable.update { it.copy(operationBusy = false) } }
+        }
     }
 
     fun openHistory(noteId: String) {
@@ -653,7 +746,7 @@ class NotesViewModel(application: Application,
                 awaitLocalWrites()
                 // Current edits must be on the server BEFORE the protective snapshot.
                 // A failure or conflict aborts restoration without replacing local content.
-                if (services.uploads.hasPending(note.id)) {
+                if (services.uploads.hasPending(note.id) || attachmentEditState.value.pendingCount > 0) {
                     mutableHistory.update { it?.copy(error = text(R.string.history_sync_first)) }
                     return@launch
                 }
@@ -701,6 +794,236 @@ class NotesViewModel(application: Application,
         }
     }
 
+    fun cachedNotes(): List<NoteMeta> = repository.cachedVisibleNotes()
+    fun cachedDocument(id: String): NoteDocument? = repository.cachedNote(id)
+    fun backlinks(id: String): List<NoteMeta> = noteBacklinks(id, repository.cachedVisibleDocuments())
+    fun destinations(): List<NoteDestination> {
+        val notes = cachedNotes().associateBy { it.id }
+        return notes.values.filter { !it.isProtected && it.type !in setOf("search", "launcher", "contentWidget", "webView") }
+            .map { note ->
+                val seen = mutableSetOf(note.id)
+                val path = mutableListOf<String>()
+                var parent = note.parentNoteIds.firstOrNull()
+                while (parent != null && parent != "root" && seen.add(parent)) {
+                    val item = notes[parent] ?: break
+                    path.add(0, item.title)
+                    parent = item.parentNoteIds.firstOrNull()
+                }
+                NoteDestination(note, path.joinToString(" / "))
+            }.sortedWith(compareBy<NoteDestination> { it.note.id != "root" }.thenBy { it.path }.thenBy { it.note.title.lowercase() })
+    }
+    fun sourceParents(note: NoteMeta): List<NoteMeta> = note.parentNoteIds.mapNotNull { parent ->
+        repository.cachedMeta(parent)?.takeIf { repository.cachedChildren(parent)?.any { it.note.id == note.id } == true }
+    }
+    fun collectionNotes(): List<NoteMeta> {
+        val notes = cachedNotes().associateBy { it.id }
+        val preferences = libraryPreferences.value
+        return when (mutable.value.librarySection) {
+            LibrarySection.NOTES -> emptyList()
+            LibrarySection.FAVORITES -> preferences.favorites.mapNotNull(notes::get).sortedBy { it.title.lowercase() }
+            LibrarySection.RECENT -> preferences.recent.mapNotNull(notes::get)
+        }.filterNot { it.id == "root" }
+    }
+    fun selectSection(section: LibrarySection) {
+        if (mutable.value.operationBusy) return
+        searchJob?.cancel()
+        mutable.update { it.copy(librarySection = section, query = "", searching = false, results = emptyList(), error = null) }
+    }
+    fun toggleFavorite(id: String) = preferenceChange { services.libraryPreferences.toggleFavorite(id) }
+    fun selectSort(sort: NoteSort) = preferenceChange { services.libraryPreferences.sort(mutable.value.folders.last().id, sort) }
+    private fun recordOpened(id: String) { if (id != "root") preferenceChange { services.libraryPreferences.opened(id) } }
+    private fun preferenceChange(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            try { block() }
+            catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutable.update { it.copy(error = text(R.string.msg_library_preferences_failed)) }
+            }
+        }
+    }
+    private class PartialLibraryOperation(val completed: Int, val total: Int, cause: Exception) : Exception(cause)
+    private fun libraryError(error: Exception): String = when (error) {
+        is TreeOperationException -> AppLanguage.get(getApplication(), error.resource)
+        is PartialLibraryOperation -> AppLanguage.get(getApplication(), R.string.msg_library_partial, error.completed, error.total)
+        else -> text(R.string.msg_library_failed)
+    }
+
+    fun organize(action: LibraryAction, notes: List<NoteMeta>, targetParentId: String, sourceParentId: String?) = mutateLibrary {
+        val selected = notes.distinctBy { it.id }
+        if (action == LibraryAction.COPY) selected.forEach { repository.validateCopySubtree(it.id, targetParentId) }
+        var completed = 0
+        try { selected.forEach { note ->
+            if (action == LibraryAction.COPY) repository.copySubtree(note.id, targetParentId)
+            else {
+                val parent = requireNotNull(sourceParentId ?: sourceParents(note).singleOrNull()?.id
+                    ?: (if (action == LibraryAction.CLONE) sourceParents(note).firstOrNull()?.id else null)) {
+                    "Choose the source folder"
+                }
+                val branch = repository.cachedChildren(parent)?.firstOrNull { it.note.id == note.id }
+                    ?: error("Source branch is unavailable")
+                if (action == LibraryAction.MOVE) repository.moveBranch(branch.branchId, parent, targetParentId)
+                else repository.cloneBranch(branch.branchId, parent, targetParentId)
+            }
+            completed++
+        } } catch (error: Exception) {
+            if (error is CancellationException || completed == 0) throw error
+            schedulePendingChanges()
+            throw PartialLibraryOperation(completed, selected.size, error)
+        }
+    }
+
+    fun reorder(branchIds: List<String>) = mutateLibrary {
+        val parent = mutable.value.folders.last().id
+        repository.reorderChildren(parent, branchIds)
+        services.libraryPreferences.sort(parent, NoteSort.MANUAL)
+    }
+    fun trashMany(notes: List<NoteMeta>) = mutateLibrary { notes.distinctBy { it.id }.forEach { repository.trash(it.id) } }
+    fun restoreFromTrash(id: String) = mutateLibrary {
+        repository.restore(id)
+        mutableTrash.value = repository.cachedTrash()
+    }
+    private fun mutateLibrary(block: suspend () -> Unit) {
+        if (mutable.value.operationBusy || mutable.value.localWritePending || mutable.value.deletingNoteId != null) return
+        mutable.update { it.copy(operationBusy = true, error = null) }
+        mutablePanelError.value = null
+        viewModelScope.launch {
+            try { awaitLocalWrites(); block(); schedulePendingChanges() }
+            catch (error: Exception) {
+                if (error is CancellationException) throw error
+                val message = libraryError(error)
+                mutablePanelError.value = message
+                mutable.update { it.copy(error = message) }
+            } finally {
+                val folders = mutable.value.folders.takeWhile { !repository.isDeleted(it.id) }.ifEmpty { listOf(Folder("root", "")) }
+                mutable.update { it.copy(operationBusy = false, folders = folders,
+                    document = it.document?.takeUnless { doc -> repository.isDeleted(doc.note.id) },
+                    items = repository.cachedChildren(folders.last().id).orEmpty(),
+                    results = it.results.filterNot { note -> repository.isDeleted(note.id) }) }
+                if (mutableTrash.value != null) mutableTrash.value = repository.cachedTrash()
+                syncNow()
+            }
+        }
+    }
+    fun openTrash() {
+        mutablePanelError.value = null
+        mutableTrash.value = repository.cachedTrash()
+        viewModelScope.launch {
+            try { mutableTrash.value = repository.listTrash() }
+            catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutablePanelError.value = loadFailureMessage(getApplication(), error)
+            }
+        }
+    }
+    fun closeTrash() { if (!mutable.value.operationBusy) mutableTrash.value = null }
+
+    fun openAttachmentManager(noteId: String) {
+        if (mutable.value.operationBusy) return
+        attachmentListOwner = noteId
+        mutablePanelError.value = null
+        mutableAttachments.value = emptyList()
+        viewModelScope.launch {
+            try {
+                awaitLocalWrites()
+                val items = services.attachments.list(noteId)
+                if (attachmentListOwner == noteId) mutableAttachments.value = items
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (attachmentListOwner == noteId) mutablePanelError.value = loadFailureMessage(getApplication(), error)
+            }
+        }
+    }
+    fun retryAttachmentManager() {
+        attachmentListOwner?.let(::openAttachmentManager)
+        syncNow()
+    }
+    fun closeAttachmentManager() {
+        if (!mutable.value.operationBusy) { mutableAttachments.value = null; attachmentListOwner = null }
+    }
+    fun changeAttachment(attachment: AttachmentMeta, title: String?) {
+        val owner = attachmentListOwner ?: return
+        if (attachment.ownerId != owner || mutable.value.operationBusy) return
+        mutable.update { it.copy(operationBusy = true) }
+        mutablePanelError.value = null
+        viewModelScope.launch {
+            try {
+                awaitLocalWrites()
+                if (title == null) services.attachments.delete(owner, attachment.id)
+                else services.attachments.rename(owner, attachment.id, title)
+                repository.cachedNote(owner)?.let { document ->
+                    mutable.update { if (it.document?.note?.id == owner) it.copy(document = document, editorEpoch = it.editorEpoch + 1) else it }
+                }
+                mutableAttachments.value = services.attachments.list(owner)
+                schedulePendingChanges()
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutablePanelError.value = text(R.string.msg_library_failed)
+            } finally { mutable.update { it.copy(operationBusy = false) }; syncNow() }
+        }
+    }
+    fun quickCreate(request: String, onHandled: () -> Unit) {
+        if (mutable.value.operationBusy || mutable.value.localWritePending) return
+        mutable.update { it.copy(operationBusy = true) }
+        viewModelScope.launch {
+            try {
+                val seed = UUID.nameUUIDFromBytes(request.toByteArray()).toString().replace("-", "")
+                val note = repository.createWithId("root", "", "<p></p>", "Q" + seed.take(31), "B" + seed.take(31))
+                repository.pinDocument(note.note.id)
+                mutable.update { it.copy(document = note, loading = false, newNoteId = note.note.id, newNoteTitleUntouched = true) }
+                services.libraryPreferences.opened(note.note.id)
+                onHandled()
+                schedulePendingChanges()
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutable.update { it.copy(error = text(R.string.msg_create_note_failed)) }
+            } finally { mutable.update { it.copy(operationBusy = false) }; syncNow() }
+        }
+    }
+    fun saveCapture(inbox: CaptureInbox, capture: PendingCapture, title: String, parentId: String?, existingId: String?) {
+        if (mutable.value.operationBusy || (capture.accountId != null && capture.accountId != accountId)) return
+        mutable.update { it.copy(operationBusy = true, error = null) }
+        mutablePanelError.value = null
+        viewModelScope.launch {
+            try {
+                awaitLocalWrites()
+                val seed = UUID.nameUUIDFromBytes(capture.id.toByteArray()).toString().replace("-", "")
+                val target = capture.targetNoteId ?: existingId ?: "S" + seed.take(31)
+                val newNote = if (capture.targetNoteId != null) capture.createNew else existingId == null
+                val parent = if (capture.targetNoteId != null) capture.targetParentId else parentId
+                val chosenTitle = capture.targetTitle ?: title.ifBlank { capture.text.lineSequence().firstOrNull().orEmpty().take(80) }
+                withContext(Dispatchers.IO) { inbox.bindTarget(capture.id, accountId, target,
+                    if (newNote) parent ?: "root" else null, if (newNote) chosenTitle else null) }
+                val current = if (newNote) repository.createWithId(parent ?: "root", chosenTitle, "<p></p>", target, "B" + seed.take(31))
+                    else repository.cachedNote(target) ?: repository.load(target)
+                require(current.note.isEditable && !current.conflict && !current.remoteMissing)
+                val markdown = current.note.mime.contains("markdown", true)
+                require(markdown || current.note.mime.substringBefore(';') == "text/html")
+                if (!capture.textApplied) {
+                    val body = if (markdown) "\n\n" + capture.text + "\n" else
+                        if (capture.text.isEmpty()) "" else "<p>" + Entities.escape(capture.text).replace("\n", "<br>") + "</p>"
+                    repository.appendCapturedText(target, capture.id, body)
+                    withContext(Dispatchers.IO) { inbox.markTextApplied(capture.id) }
+                }
+                for (attachment in capture.attachments) {
+                    if (attachment.id in capture.appliedAttachmentIds) continue
+                    val uploadId = UUID.nameUUIDFromBytes((capture.id + ":" + attachment.id).toByteArray()).toString()
+                    services.uploads.stageFile(inbox.attachmentFile(capture.id, attachment.id), target,
+                        attachment.title, attachment.mime, attachment.mime.startsWith("image/"), uploadId)
+                    withContext(Dispatchers.IO) { inbox.markAttachmentApplied(capture.id, attachment.id) }
+                }
+                withContext(Dispatchers.IO) { inbox.complete(capture.id) }
+                repository.pinDocument(target)
+                services.libraryPreferences.opened(target)
+                mutable.update { it.copy(document = repository.cachedNote(target), loading = false,
+                    editorEpoch = it.editorEpoch + 1, newNoteId = null) }
+                schedulePendingChanges()
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                mutablePanelError.value = text(R.string.msg_library_failed)
+            } finally { mutable.update { it.copy(operationBusy = false) }; syncNow() }
+        }
+    }
+
     private fun folderHasContent(id: String, note: NoteMeta, body: String): Boolean {
         if (id == "root" || note.type in setOf("book", "launcher", "contentWidget", "search", "noteMap")) return false
         if (note.type !in setOf("text", "doc")) return body.isNotBlank()
@@ -728,6 +1051,7 @@ class NotesViewModel(application: Application,
 
     override fun onCleared() {
         if (services.attachmentInsertionHandler === insertionHandler) services.attachmentInsertionHandler = null
+        if (services.attachments.syncGate === metadataSyncGate) services.attachments.syncGate = null
         repository.pinDocument(null)
         super.onCleared()
     }

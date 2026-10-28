@@ -30,6 +30,7 @@ data class PendingAttachmentUpload(
     val inlineImage: Boolean,
     val attachmentId: String? = null,
     val contentUploaded: Boolean = false,
+    val insertionAnchor: String? = null,
 )
 
 data class AttachmentUploadState(
@@ -59,8 +60,18 @@ class AttachmentUploadQueue(
 ) {
     private val directory = File(context.filesDir, "attachment-uploads").apply { mkdirs() }
     private val syncMutex = Mutex()
-    private val mutable = MutableStateFlow(AttachmentUploadState(pendingCount = entries().size))
+    private val stageMutex = Mutex()
+    private val mutable = MutableStateFlow(AttachmentUploadState(pendingCount = activeEntries().size))
     val state = mutable.asStateFlow()
+
+    /** Trash suspends uploads without losing staged bytes; restore makes them runnable again. */
+    suspend fun refreshPendingCount(): Int = withContext(Dispatchers.IO) {
+        activeEntries().size.also { mutable.value = mutable.value.copy(pendingCount = it, error = if (it == 0) null else mutable.value.error) }
+    }
+
+    private fun activeEntries(): List<File> = entries().filter { folder ->
+        runCatching { !repository.isRecoverablyDeleted(read(folder).noteId) }.getOrDefault(true)
+    }
 
     /** Read durable entries rather than a transient foreground count. */
     suspend fun hasPending(noteId: String): Boolean = withContext(Dispatchers.IO) {
@@ -70,7 +81,7 @@ class AttachmentUploadQueue(
         }
     }
 
-    suspend fun stage(uri: Uri, noteId: String, inlineImage: Boolean): PendingAttachmentUpload =
+    suspend fun stage(uri: Uri, noteId: String, inlineImage: Boolean, insertionAnchor: String? = null): PendingAttachmentUpload =
         withContext(Dispatchers.IO) {
             require(noteId.matches(Regex("[A-Za-z0-9_]{4,32}")) && noteId != "new_note")
             require(uri.scheme == "content" || uri.scheme == "file")
@@ -86,7 +97,9 @@ class AttachmentUploadQueue(
                 ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(title.substringAfterLast('.', "").lowercase(Locale.ROOT))
                 ?: "application/octet-stream"
             require(!inlineImage || mime.startsWith("image/"))
-            val upload = PendingAttachmentUpload(UUID.randomUUID().toString(), noteId, title, mime, inlineImage)
+            require(insertionAnchor == null || isAttachmentAnchor(insertionAnchor))
+            val upload = PendingAttachmentUpload(UUID.randomUUID().toString(), noteId, title, mime, inlineImage,
+                insertionAnchor = insertionAnchor)
             val stage = File(directory, ".stage-${upload.uploadId}")
             if (!stage.mkdirs()) throw IOException("Could not stage attachment")
             try {
@@ -111,17 +124,66 @@ class AttachmentUploadQueue(
                 }
                 save(stage, upload)
                 if (!stage.renameTo(File(directory, upload.uploadId))) throw IOException("Could not commit attachment")
-                mutable.value = mutable.value.copy(pendingCount = entries().size, error = null)
+                mutable.value = mutable.value.copy(pendingCount = activeEntries().size, error = null)
                 upload
             } finally {
                 stage.deleteRecursively()
             }
         }
 
+    /** Stable IDs make external-share staging replayable after process death. Completion records contain no URLs. */
+    suspend fun stageFile(file: File, noteId: String, title: String, mime: String, inlineImage: Boolean,
+        uploadId: String, insertionAnchor: String? = null): PendingAttachmentUpload = withContext(Dispatchers.IO) { stageMutex.withLock stage@{
+        require(isAttachmentAnchor(uploadId))
+        require(noteId.matches(Regex("[A-Za-z0-9_]{4,32}")) && noteId != "new_note")
+        require(insertionAnchor == null || isAttachmentAnchor(insertionAnchor))
+        require(mime.matches(Regex("[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+")))
+        require(!inlineImage || mime.startsWith("image/"))
+        val completed = File(directory, ".completed/$uploadId")
+        val destination = File(directory, uploadId)
+        if (File(destination, "entry.json").isFile || File(destination, "entry.json.bak").isFile)
+            return@stage read(destination).also { require(it.noteId == noteId) }
+        val upload = PendingAttachmentUpload(uploadId, noteId, uploadTitle(title), mime, inlineImage,
+            insertionAnchor = insertionAnchor)
+        if (completed.isFile || File(completed.path + ".bak").isFile) {
+            require(AtomicFile(completed).readFully().toString(Charsets.UTF_8) == noteId)
+            return@stage upload
+        }
+        require(repository.cachedNote(noteId)?.let { it.note.isEditable && !it.conflict } == true)
+        val stage = File(directory, ".stage-$uploadId")
+        // A previous interrupted copy is private staging, never a committed upload.
+        stage.deleteRecursively()
+        if (!stage.mkdirs()) throw IOException("Could not stage attachment")
+        try {
+            val atomic = AtomicFile(File(stage, "content"))
+            val output = atomic.startWrite()
+            try {
+                file.inputStream().use { input ->
+                    val bytes = ByteArray(8192)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val count = input.read(bytes)
+                        if (count < 0) break
+                        output.write(bytes, 0, count)
+                    }
+                }
+                atomic.finishWrite(output)
+            } catch (error: Throwable) { atomic.failWrite(output); throw error }
+            save(stage, upload)
+            if (!stage.renameTo(destination)) throw IOException("Could not commit attachment")
+            mutable.value = mutable.value.copy(pendingCount = activeEntries().size, error = null)
+            upload
+        } finally { stage.deleteRecursively() }
+    } }
+
+    suspend fun pendingAnchors(): Set<String> = withContext(Dispatchers.IO) {
+        entries().mapNotNull { runCatching { read(it).insertionAnchor }.getOrNull() }.toSet()
+    }
+
     /** Call after repository.syncPending(): local note IDs stay stable when created. */
     suspend fun syncPending(): AttachmentUploadState = withContext(Dispatchers.IO) {
         syncMutex.withLock {
-            val total = entries().size
+            val total = activeEntries().size
             var completed = 0
             mutable.value = AttachmentUploadState(total, isSyncing = true, totalCount = total)
             var failed = false
@@ -131,7 +193,9 @@ class AttachmentUploadQueue(
                     try {
                         var upload = read(folder)
                         mutable.value = mutable.value.copy(currentTitle = upload.title)
-                        // Keep recoverable bytes, but do not retry an owner explicitly deleted.
+                        // Native trash is reversible: retain the original outbox entry for restore.
+                        if (repository.isRecoverablyDeleted(upload.noteId)) continue
+                        // Legacy permanent deletions keep their bytes in the retained directory.
                         if (repository.isDeleted(upload.noteId)) {
                             retain(folder)
                             continue
@@ -166,16 +230,23 @@ class AttachmentUploadQueue(
                         api.patchAttachmentTitle(attachment.id, upload.title)
                         // POST metadata still refers to the initial empty blob. Validate
                         // the version after PUT so the next offline crawl reuses this copy.
-                        attachment = api.getAttachments(upload.noteId).firstOrNull { it.id == attachment.id }
+                        val freshAttachments = api.getAttachments(upload.noteId)
+                        repository.rememberAttachments(upload.noteId, freshAttachments)
+                        attachment = freshAttachments.firstOrNull { it.id == attachment.id }
                             ?: throw IOException("Uploaded attachment metadata is missing")
                         resources.cacheUploadedAttachment(attachment, File(folder, "content"))
                         appendReference(upload, attachment)
+                        val completedDirectory = File(directory, ".completed").apply { mkdirs() }
+                        val completion = AtomicFile(File(completedDirectory, upload.uploadId))
+                        val completionOutput = completion.startWrite()
+                        try { completionOutput.write(upload.noteId.toByteArray(Charsets.UTF_8)); completion.finishWrite(completionOutput) }
+                        catch (error: Throwable) { completion.failWrite(completionOutput); throw error }
                         // The note reference is now in the existing durable edit queue.
                         // Remove metadata first; an orphan content file is never re-enqueued.
                         AtomicFile(File(folder, "entry.json")).delete()
                         folder.deleteRecursively()
                         completed++
-                        mutable.value = mutable.value.copy(completedCount = completed, pendingCount = entries().size)
+                        mutable.value = mutable.value.copy(completedCount = completed, pendingCount = activeEntries().size)
                     } catch (_: AttachmentInsertionDeferred) {
                         // The PUT is confirmed; this is an editor handoff, not a failure.
                     } catch (cancelled: CancellationException) {
@@ -203,7 +274,7 @@ class AttachmentUploadQueue(
                     }
                 }
             } finally {
-                mutable.value = AttachmentUploadState(entries().size, error = if (failed)
+                mutable.value = AttachmentUploadState(activeEntries().size, error = if (failed)
                     AppLanguage.get(context, R.string.msg_upload_retry) else null,
                     completedCount = completed, totalCount = total)
             }
@@ -225,6 +296,7 @@ class AttachmentUploadQueue(
         val json = JSONObject().put("uploadId", upload.uploadId).put("noteId", upload.noteId)
             .put("title", upload.title).put("mime", upload.mime).put("inlineImage", upload.inlineImage)
             .put("attachmentId", upload.attachmentId).put("contentUploaded", upload.contentUploaded)
+            .put("insertionAnchor", upload.insertionAnchor)
         val atomic = AtomicFile(File(folder, "entry.json"))
         val output = atomic.startWrite()
         try {
@@ -240,7 +312,9 @@ class AttachmentUploadQueue(
         val json = JSONObject(AtomicFile(File(folder, "entry.json")).readFully().toString(Charsets.UTF_8))
         val upload = PendingAttachmentUpload(json.getString("uploadId"), json.getString("noteId"),
             json.getString("title"), json.getString("mime"), json.getBoolean("inlineImage"),
-            json.optString("attachmentId").takeIf { it.isNotBlank() && it != "null" }, json.optBoolean("contentUploaded"))
+            json.optString("attachmentId").takeIf { it.isNotBlank() && it != "null" }, json.optBoolean("contentUploaded"),
+            json.optString("insertionAnchor").takeIf { it.isNotBlank() && it != "null" })
+        require(upload.insertionAnchor == null || isAttachmentAnchor(upload.insertionAnchor))
         require(upload.uploadId == folder.name)
         require(upload.noteId.matches(Regex("[A-Za-z0-9_]{4,32}")))
         require(upload.attachmentId == null || upload.attachmentId.matches(Regex("[A-Za-z0-9_]{4,32}")))
@@ -274,4 +348,30 @@ fun attachmentReference(upload: PendingAttachmentUpload, attachment: AttachmentM
         .replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
     return if (upload.inlineImage) "<p><img src=\"${escape(path)}\" alt=\"${escape(upload.title)}\"></p>"
     else "<p><a href=\"${escape(path)}\">${escape(upload.title)}</a></p>"
+}
+
+
+fun isAttachmentAnchor(value: String): Boolean = value.matches(Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"))
+
+/** Replace one durable cursor placeholder without reparsing or normalizing surrounding source. */
+fun replaceAttachmentPlaceholder(content: String, upload: PendingAttachmentUpload, attachment: AttachmentMeta,
+    markdown: Boolean): String? {
+    val anchor = upload.insertionAnchor ?: return null
+    require(isAttachmentAnchor(anchor))
+    val target = "#pocket-upload-$anchor"
+    val pattern = if (markdown) Regex("\\[(?:\\\\.|[^\\]\\n])*]\\(<?${Regex.escape(target)}>?\\)")
+        else Regex("<a\\b(?=[^>]*\\bhref=[\"']${Regex.escape(target)}[\"'])[^>]*>[\\s\\S]*?</a>", RegexOption.IGNORE_CASE)
+    val match = pattern.find(content) ?: return null
+    val reference = attachmentReference(upload, attachment, markdown).trim().let {
+        if (markdown) it else it.removePrefix("<p>").removeSuffix("</p>")
+    }
+    return content.replaceRange(match.range, reference)
+}
+
+/** Remove abandoned picker reservations, keeping anchors belonging to durable uploads or the active picker. */
+fun clearAbandonedAttachmentPlaceholders(content: String, activeAnchors: Set<String>, markdown: Boolean): String {
+    val anchorPattern = if (markdown)
+        Regex("\\[(?:\\\\.|[^\\]\\n])*]\\(<?#pocket-upload-([a-f0-9-]{36})>?\\)")
+    else Regex("<a\\b(?=[^>]*\\bhref=[\"']#pocket-upload-([a-f0-9-]{36})[\"'])[^>]*>[\\s\\S]*?</a>", RegexOption.IGNORE_CASE)
+    return anchorPattern.replace(content) { match -> if (match.groupValues[1] in activeAnchors) match.value else "" }
 }

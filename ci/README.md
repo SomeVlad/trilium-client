@@ -4,12 +4,12 @@
 
 [release.yml](../.github/workflows/release.yml) принимает только стабильные теги `vMAJOR.MINOR.PATCH`. Тег должен точно совпадать с `versionName` и указывать на коммит из истории `master`. Перед новым релизом обновите `versionName` и увеличьте `versionCode` в `app/build.gradle.kts`.
 
-После обновления версии и коммита отправьте ветку и новый тег; пример для `0.5.1`:
+После обновления версии и коммита отправьте ветку и новый тег; пример для `0.6.0`:
 
 ```sh
 git push origin master
-git tag v0.5.1
-git push origin v0.5.1
+git tag v0.6.0
+git push origin v0.6.0
 ```
 
 Для подписанного APK нужны четыре Actions secrets:
@@ -29,6 +29,6 @@ git push origin v0.5.1
 
 ```sh
 actionlint .github/workflows/*.yml
-python3 scripts/verify-release.py --tag v0.5.0
+python3 scripts/verify-release.py --tag v0.6.0
 python3 -m unittest discover -s ci -p 'test_*.py'
 ```

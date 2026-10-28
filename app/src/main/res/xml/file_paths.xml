@@ -2,4 +2,5 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <files-path name="note_attachments" path="note-resources/" />
     <files-path name="account_attachments" path="accounts/" />
+    <files-path name="capture_inbox" path="capture-inbox/" />
 </paths>

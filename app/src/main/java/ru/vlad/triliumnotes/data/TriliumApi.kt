@@ -33,6 +33,7 @@ data class NoteMeta(
     val childBranchIds: List<String>,
     val parentNoteIds: List<String> = emptyList(),
     val docName: String? = null,
+    val attributes: List<NoteAttribute> = emptyList(),
 )
 
 data class TreeItem(
@@ -199,6 +200,25 @@ class TriliumApi(
         send(method, endpoint(*segments.toTypedArray()), body, allowsHtmlBody = allowsHtmlBody,
             expectedCode = if (method == "POST" && segments.lastOrNull() == "revision") 204 else null)
 
+    internal suspend fun etapiRequest(method: String, segments: List<String>, body: String? = null,
+        expectedCode: Int? = null): String =
+        send(method, endpoint(*segments.toTypedArray()),
+            body ?: if (method in setOf("POST", "PUT", "PATCH")) "{}" else null, expectedCode = expectedCode)
+
+    /** Tree copies upload their durable private outbox file without buffering it. */
+    internal suspend fun etapiPutFile(segments: List<String>, file: File) = withContext(Dispatchers.IO) {
+        checkActive()
+        val request = Request.Builder().url(endpoint(*segments.toTypedArray()))
+            .header("Authorization", authorization)
+            .put(file.asRequestBody("application/octet-stream".toMediaType())).build()
+        binaryClient.newBuilder().callTimeout(5, TimeUnit.MINUTES).build().newCall(request).execute().use { response ->
+            checkActive()
+            if (isKnownCrowdSecCaptchaPage(response.peekBody(65_536).string()))
+                throw UnexpectedHtmlResponseException(response.code)
+            if (response.code != 204) throw ApiException(response.code)
+        }
+    }
+
     suspend fun createAttachment(ownerId: String, role: String, mime: String, title: String,
         position: Int): AttachmentMeta {
         val item = JSONObject(send("POST", endpoint("attachments"), JSONObject()
@@ -302,7 +322,8 @@ class TriliumApi(
             // Branch IDs can join two 32-character note IDs with an underscore.
             val maxIdLength = if (parts.firstOrNull() == "branches" && index == 1) 65 else 32
             require(part == "root" || part.matches(Regex("[A-Za-z0-9_]{4,$maxIdLength}")) ||
-                part in setOf("notes", "branches", "content", "create-note", "attachments", "app-info"))
+                part in setOf("notes", "branches", "content", "create-note", "attachments", "app-info",
+                    "attributes", "refresh-note-ordering", "undelete"))
             addPathSegment(part)
         }
     }.build()
@@ -436,5 +457,8 @@ internal fun parseNote(json: JSONObject): NoteMeta {
         parentNoteIds = if (parents == null) emptyList() else
             (0 until parents.length()).map { parents.getString(it) },
         docName = docName,
+        attributes = if (attributes == null) emptyList() else (0 until attributes.length()).map {
+            NoteAttribute.fromJson(attributes.getJSONObject(it))
+        },
     )
 }

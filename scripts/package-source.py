@@ -189,6 +189,119 @@ def editor_notices(lock: dict, files: dict[str, bytes]) -> bytes:
     return "\n".join(output).replace("\r\n", "\n").replace("\r", "\n").encode()
 
 
+
+def diagram_lock_from_archive(app_data: bytes) -> dict | None:
+    """The requested revision, never the working tree, supplies the viewer inventory."""
+    with tarfile.open(fileobj=io.BytesIO(app_data)) as archive:
+        try:
+            content = archive.extractfile("scripts/diagrams/sources.lock.json")
+        except KeyError:
+            if any(m.name.startswith("app/src/main/assets/diagrams/") for m in archive):
+                raise ValueError("Diagram assets have no committed source lock")
+            return None
+        if content is None:
+            raise ValueError("Missing diagram source lock")
+        lock = json.load(content)
+        if lock.get("schemaVersion") != 1:
+            raise ValueError("Unsupported diagram source lock schema")
+        npm_lock_file = archive.extractfile("scripts/diagrams/package-lock.json")
+        if npm_lock_file is None:
+            raise ValueError("Missing diagram npm lockfile")
+        npm_lock = json.load(npm_lock_file)
+        expected = {path: item for path, item in npm_lock["packages"].items() if path and item.get("resolved")}
+        actual = {item["path"]: item for item in lock["packages"]}
+        if len(actual) != len(lock["packages"]) or set(expected) != set(actual):
+            raise ValueError("Diagram npm source closure differs from package-lock.json")
+        for path, item in expected.items():
+            record = actual[path]
+            name = path.rsplit("node_modules/", 1)[-1]
+            if any(record.get(key) != value for key, value in {
+                "name": name, "version": item["version"], "url": item["resolved"],
+                "integrity": item["integrity"], "dev": item.get("dev", False),
+            }.items()):
+                raise ValueError("Diagram npm source integrity differs from package-lock.json")
+        asset_prefix = "app/src/main/assets/diagrams/vendor/"
+        bundled = lock["bundledFiles"]
+        assets = {m.name.removeprefix(asset_prefix) for m in archive if m.isfile() and m.name.startswith(asset_prefix)}
+        if assets != set(bundled):
+            raise ValueError("Diagram asset inventory is incomplete")
+        for name, digest in bundled.items():
+            if PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts:
+                raise ValueError("Unsafe diagram asset path")
+            content = archive.extractfile(asset_prefix + name)
+            if content is None or sha256(content.read()) != digest:
+                raise ValueError("Bundled diagram content differs from its source lock: " + name)
+        required = {"mermaid.js", "excalidraw.js", "viewer.js", "THIRD_PARTY_NOTICES.txt", "UPSTREAM_LICENSES.txt"}
+        if not required <= set(bundled) or not any(name.startswith("fonts/") and name.endswith(".woff2") for name in bundled):
+            raise ValueError("Diagram renderer, local fonts or retained notices are missing")
+        for name in ("mermaid", "excalidraw", "viewer"):
+            content = archive.extractfile("scripts/diagrams/maps/" + name + ".js.map")
+            metadata = archive.extractfile("scripts/diagrams/maps/" + name + ".meta.json")
+            if content is None or metadata is None:
+                raise ValueError("Missing diagram source map or dependency metadata")
+            source_map = json.load(content)
+            if len(source_map["sources"]) != len(source_map["sourcesContent"]) or any(x is None for x in source_map["sourcesContent"]):
+                raise ValueError("Diagram source map has incomplete original content")
+            inputs = json.load(metadata)["inputs"]
+            for source in inputs:
+                if source.startswith("node_modules/"):
+                    package_matches = list(re.finditer(r"(?:^|/)node_modules/(?:@[^/]+/)?[^/]+", source))
+                    package_path = source[:package_matches[-1].end()] if package_matches else ""
+                    if package_path not in actual:
+                        raise ValueError("A bundled diagram module has no locked npm source")
+        for required_file in ("scripts/diagrams/build.mjs", "scripts/diagrams/package.json", "scripts/diagrams/README.txt"):
+            if archive.extractfile(required_file) is None:
+                raise ValueError("Missing diagram build recipe")
+        upstream = lock["upstreamSources"]
+        if not {"mermaid", "@excalidraw/excalidraw"} <= {item["name"] for item in upstream}:
+            raise ValueError("Missing preferred diagram renderer source archive")
+        for name, digest in lock.get("preferredSources", {}).items():
+            if not name.startswith("preferred-sources/") or PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts:
+                raise ValueError("Unsafe preferred diagram source path")
+            content = archive.extractfile("scripts/diagrams/" + name)
+            if content is None or sha256(content.read()) != digest:
+                raise ValueError("Preferred diagram source differs from its source lock")
+        return lock
+
+
+def diagram_inputs(lock: dict, downloads: Downloads) -> tuple[dict[str, bytes], list[dict]]:
+    """Retain exact npm archives (including the pinned bundler) and preferred upstream trees."""
+    files: dict[str, bytes] = {}
+    records: list[dict] = []
+    unique: dict[tuple[str, str], dict] = {}
+    for item in lock["packages"]:
+        key = (item["name"], item["version"])
+        if key in unique and any(unique[key][field] != item[field] for field in ("url", "integrity")):
+            raise ValueError("Conflicting diagram source archives for the same npm version")
+        unique[key] = item
+    def fetch(item: dict) -> tuple[str, bytes, dict]:
+        if not re.fullmatch(r"(?:@[A-Za-z0-9_.-]+/)?[A-Za-z0-9_.-]+", item["name"]) or not re.fullmatch(r"[A-Za-z0-9_.+-]+", item["version"]):
+            raise ValueError("Unsafe diagram npm coordinate")
+        data = downloads.get(item["url"], integrity=item["integrity"])
+        path = "third-party-sources/diagrams/npm/" + npm_filename(item)
+        # The original package archive must remain readable, including its preferred sources/notices.
+        with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+            if not archive.getmembers():
+                raise ValueError("Empty diagram npm source archive")
+        return path, data, {**item, "npmLockPath": item["path"], "path": path, "sha256": sha256(data)}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        for path, data, record in pool.map(fetch, (unique[key] for key in sorted(unique))):
+            files[path] = data
+            records.append(record)
+    for item in lock["upstreamSources"]:
+        filename = item["filename"]
+        if PurePosixPath(filename).name != filename or not re.fullmatch(r"[A-Za-z0-9_.-]+", filename):
+            raise ValueError("Unsafe diagram upstream source filename")
+        data = downloads.get(item["url"], digest=item["sha256"])
+        path = "third-party-sources/diagrams/upstream/" + filename
+        with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+            if not archive.getmembers():
+                raise ValueError("Empty preferred diagram source archive")
+        files[path] = data
+        records.append({**item, "path": path})
+    return files, records
+
+
 def maven_inputs(dependencies: list[dict], lock: dict, downloads: Downloads) -> tuple[dict[str, bytes], list[dict]]:
     def validate(coordinate: dict) -> None:
         for key in ("group", "name", "version"):
@@ -282,6 +395,7 @@ def safe_app_archive(commit: str, lock: dict) -> bytes:
             content = archive.extractfile("app/src/main/assets/editor/vendor/" + name)
             if content is None or sha256(content.read()) != digest:
                 raise ValueError("Bundled editor content differs from sources.lock.json: " + name)
+    diagram_lock_from_archive(data)
     return data
 
 
@@ -317,6 +431,13 @@ def package(args: argparse.Namespace) -> None:
         if notice is None or notice.read() != notices:
             raise ValueError("Bundled editor dependency notices need regeneration")
 
+    diagrams = diagram_lock_from_archive(app_data)
+    diagram_records = []
+    if diagrams is not None:
+        print("Downloading and verifying the locked offline diagram sources...", flush=True)
+        diagram_files, diagram_records = diagram_inputs(diagrams, downloads)
+        files.update(diagram_files)
+
     metadata = json.loads(args.dependencies.read_text())
     if metadata.get("schemaVersion") != 1 or metadata.get("configuration") != "releaseRuntimeClasspath":
         raise ValueError("Expected a resolved releaseRuntimeClasspath manifest")
@@ -333,6 +454,8 @@ def package(args: argparse.Namespace) -> None:
     manifest = {
         "schemaVersion": 1, "application": {"commit": commit, "ref": args.ref, "versionName": version},
         "editor": editor_records, "runtimeLibraries": maven_records,
+        "diagrams": {"sources": diagram_records, "bundledFiles": diagrams["bundledFiles"] if diagrams else {},
+                     "preferredSources": diagrams.get("preferredSources", {}) if diagrams else {}},
     }
     files["SOURCE_MANIFEST.json"] = json_bytes(manifest)
     files["RUNTIME_DEPENDENCIES.json"] = json_bytes(metadata)
@@ -353,6 +476,14 @@ def package(args: argparse.Namespace) -> None:
         "then replace the three editor vendor assets from packages/ckeditor5/dist. The\n"
         "upstream build scripts and lockfile are included. Use the npm source packages\n"
         "and TypeScript supplements when modifying their corresponding modules.\n\n"
+        "The offline diagram viewer has a separate pinned build in scripts/diagrams.\n"
+        "Its npm archives include the exact renderer dependencies and esbuild toolchain,\n"
+        "and the preferred Mermaid/Excalidraw source trees are included under\n"
+        "third-party-sources/diagrams/upstream. Full source maps and the build recipe\n"
+        "are in scripts/diagrams/maps and scripts/diagrams/build.mjs. With Node 22, run\n"
+        "`cd scripts/diagrams && npm ci --ignore-scripts && npm run build && npm test`.\n"
+        "The local font files and retained font/dependency notices are inventoried in\n"
+        "scripts/diagrams/sources.lock.json; no device-side CDN is required.\n\n"
         "The sources are provided alongside the APK under the licenses and copyright\n"
         "notices preserved in LICENSE, NOTICE, THIRD_PARTY_NOTICES.md and the archives.\n"
     ).encode()
@@ -380,6 +511,7 @@ def package(args: argparse.Namespace) -> None:
         temporary.unlink(missing_ok=True)
     print(json.dumps({"archive": str(args.output), "applicationCommit": commit,
                       "runtimeLibraries": len(maven_records), "npmPackages": len(lock["editor"]["npmPackages"]),
+                      "diagramSourceArchives": len(diagram_records),
                       "sha256": sha256(args.output.read_bytes())}))
 
 

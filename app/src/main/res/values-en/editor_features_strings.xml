@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="editor_insert_note_link">Link to note</string>
+    <string name="editor_find_note">Find note</string>
+    <string name="editor_backlinks">Backlinks</string>
+    <string name="editor_no_backlinks">No backlinks in notes saved on this device.</string>
+    <string name="editor_attach_camera">Take photo</string>
+    <string name="editor_attachment_pending">Uploading attachment…</string>
+    <string name="editor_attachments">Attachments</string>
+    <string name="editor_no_attachments">No attachments</string>
+    <string name="editor_rename_attachment">Rename</string>
+    <string name="editor_delete_attachment">Delete attachment</string>
+    <string name="editor_delete_attachment_confirmation">Delete “%1$s” and its references from this note? Links in other notes will stop working. Offline deletion completes after synchronization.</string>
+    <string name="editor_apply">Apply</string>
+    <string name="editor_attachment_retry">Attachment changes will be retried during synchronization.</string>
+    <string name="editor_attachment_storage_error">Could not read attachment operations. Notes remain available; the queue has been preserved for recovery.</string>
+</resources>

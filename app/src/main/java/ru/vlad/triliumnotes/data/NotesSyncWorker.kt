@@ -21,6 +21,7 @@ class NotesSyncWorker internal constructor(
             return@withContext Result.success()
         services.repository.syncPending()
         val uploads = services.uploads.syncPending()
+        val attachmentEdits = services.attachments.syncPending()
         services.repository.syncPending()
         val offline = if (inputData.getBoolean(NotesSyncScheduler.UPLOAD_ONLY, false)) null
             else services.offline.refreshAll()
@@ -28,7 +29,7 @@ class NotesSyncWorker internal constructor(
         // A foreground crawl may already be running, or a new edit may have arrived
         // after this crawl took its outbox snapshot. Keep durable work scheduled.
         if (offline?.isRunning == true || offline?.error != null || pending.error != null ||
-            uploads.pendingCount > 0 || uploads.error != null ||
+            uploads.pendingCount > 0 || uploads.error != null || attachmentEdits > 0 ||
             pending.pendingCount > pending.conflicts.size) Result.retry() else Result.success()
     }
 }

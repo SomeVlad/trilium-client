@@ -12,6 +12,8 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -54,6 +56,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.vlad.triliumnotes.Folder
 import ru.vlad.triliumnotes.NotesScreenState
 import ru.vlad.triliumnotes.NotesViewModel
+import ru.vlad.triliumnotes.data.*
+import ru.vlad.triliumnotes.capture.*
+import ru.vlad.triliumnotes.diagrams.DiagramViewer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import java.util.UUID
 import ru.vlad.triliumnotes.data.CachedAttachment
 import ru.vlad.triliumnotes.data.AttachmentUploadState
 import ru.vlad.triliumnotes.data.NoteDocument
@@ -71,16 +80,58 @@ import ru.vlad.triliumnotes.editor.NoteSearchBar
 import ru.vlad.triliumnotes.editor.rememberNoteSearchState
 
 @Composable
-fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
+fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {},
+    captureInbox: ru.vlad.triliumnotes.capture.CaptureInbox? = null,
+    quickNoteRequest: String? = null, onQuickNoteHandled: () -> Unit = {},
+) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val state by model.state.collectAsStateWithLifecycle()
-    val sync by model.syncState.collectAsStateWithLifecycle()
+    val noteSync by model.syncState.collectAsStateWithLifecycle()
     val offline by model.offlineState.collectAsStateWithLifecycle()
     val upload by model.uploadState.collectAsStateWithLifecycle()
     val history by model.historyState.collectAsStateWithLifecycle()
+    val preferences by model.libraryPreferences.collectAsStateWithLifecycle()
+    val metadataEdits by model.attachmentEditState.collectAsStateWithLifecycle()
+    val sync = noteSync.copy(pendingCount = noteSync.pendingCount + metadataEdits.pendingCount,
+        isSyncing = noteSync.isSyncing || metadataEdits.isSyncing, error = noteSync.error ?: metadataEdits.error)
+    val trash by model.trashState.collectAsStateWithLifecycle()
+    val attachmentList by model.attachmentList.collectAsStateWithLifecycle()
+    val panelError by model.panelError.collectAsStateWithLifecycle()
+    val captures by (captureInbox?.entries ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList<PendingCapture>()) }).collectAsStateWithLifecycle()
+    var dismissedCaptures by rememberSaveable { mutableStateOf(listOf<String>()) }
+    var pendingAction by remember { mutableStateOf<LibraryActionRequest?>(null) }
+    var showBacklinks by remember { mutableStateOf<String?>(null) }
+    val editorHandoff = remember(model) { EditorHandoff() }
+    LaunchedEffect(quickNoteRequest, state.operationBusy, state.localWritePending) {
+        if (quickNoteRequest != null && !state.operationBusy && !state.localWritePending)
+            editorHandoff.run { model.quickCreate(quickNoteRequest, onQuickNoteHandled) }
+    }
+    fun startAction(action: LibraryAction, notes: List<NoteMeta>, sourceParent: String?) {
+        pendingAction = LibraryActionRequest(action, notes, sourceParent)
+    }
     var attachmentOwner by rememberSaveable { mutableStateOf<String?>(null) }
+    var pickerAnchor by rememberSaveable { mutableStateOf<String?>(null) }
+    var pickerAccount by rememberSaveable { mutableStateOf<String?>(null) }
     var attachmentUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var linkError by remember { mutableStateOf<String?>(null) }
+    fun clearPicker() { attachmentOwner = null; pickerAnchor = null; pickerAccount = null }
+    val attachmentPicker = rememberAttachmentPickerController(onPicked = { uri, inlineImage ->
+        val owner = attachmentOwner
+        if (owner != null && pickerAccount == model.accountId) {
+            model.stageAttachment(owner, uri, inlineImage, pickerAnchor) { success ->
+                clearPicker()
+                if (!success) model.cleanupAttachmentAnchors(owner, null)
+            }
+        } else {
+            linkError = AppLanguage.get(context, R.string.capture_account_changed)
+            clearPicker()
+        }
+    }, onCancelled = {
+        val owner = attachmentOwner
+        clearPicker()
+        owner?.let { model.cleanupAttachmentAnchors(it, null) }
+    })
     fun openLink(value: String) {
         if (resolveResourceTarget(value, model.serverUrl) != null) {
             attachmentUrl = value
@@ -98,7 +149,7 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
         catch (_: ActivityNotFoundException) { linkError = AppLanguage.get(context, R.string.link_no_app) }
         catch (_: SecurityException) { linkError = AppLanguage.get(context, R.string.link_open_error) }
     }
-    BackHandler(state.operationBusy || state.document != null || state.openingNoteId != null || state.folders.size > 1 || state.query.isNotEmpty()) {
+    BackHandler(state.operationBusy || state.document != null || state.openingNoteId != null || state.folders.size > 1 || state.query.isNotEmpty() || state.librarySection != LibrarySection.NOTES) {
         if (!state.operationBusy) model.back()
     }
     val document = state.document
@@ -111,7 +162,11 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
             offline = offline, uploadState = upload,
             onOpenConflict = { sync.conflicts.firstOrNull()?.let(model::openById) }, onDelete = model::delete,
             listState = listState, onCreateFolder = model::createFolder,
-            onConnectionSettings = onConnectionSettings)
+            onConnectionSettings = onConnectionSettings,
+            preferences = preferences, collectionNotes = model.collectionNotes(), onSection = model::selectSection,
+            onFavorite = model::toggleFavorite, onOrganize = ::startAction, onSort = model::selectSort,
+            onReorder = model::reorder, onTrashMany = model::trashMany, onTrash = model::openTrash,
+            captureCount = captures.size, onCaptures = { dismissedCaptures = emptyList() })
     } else {
         NoteEditorHost(document.note.id) {
             EditorScreen(state, document, sync, onBack = model::back,
@@ -123,11 +178,21 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
                 attachmentLoader = model::loadAttachment, onRetryLocalSave = model::retryLocalSave,
                 onDelete = { model.delete(document.note) }, serverUrl = model.serverUrl,
                 uploadState = upload, onHistory = { model.openHistory(document.note.id) },
-                onAttachmentPickStarted = { attachmentOwner = document.note.id },
-                onAttachment = { uri, inlineImage ->
-                    attachmentOwner?.let { owner -> model.stageAttachment(owner, uri, inlineImage) }
+                editorHandoff = editorHandoff, attachmentPickerController = attachmentPicker,
+                externalAttachmentAnchor = pickerAnchor, onAttachmentAnchor = { pickerAnchor = it },
+                onAttachmentPickStarted = { attachmentOwner = document.note.id; pickerAccount = model.accountId },
+                onAttachmentAtCursor = { uri, inlineImage, anchor ->
+                    attachmentOwner?.let { owner -> model.stageAttachment(owner, uri, inlineImage, anchor) }
                     attachmentOwner = null
-                }, onEditingChanged = { model.setEditing(document.note.id, it) })
+                }, onPrepareAttachment = model::prepareAttachmentPick,
+                onCancelAttachment = { model.cleanupAttachmentAnchors(document.note.id, null) },
+                onRecoverAttachment = { model.cleanupAttachmentAnchors(document.note.id, it) }, onEditingChanged = { model.setEditing(document.note.id, it) },
+                favorite = document.note.id in preferences.favorites, onFavorite = { model.toggleFavorite(document.note.id) },
+                onOrganize = { action ->
+                    val from = state.folders.last().id.takeIf { parent -> model.sourceParents(document.note).any { it.id == parent } }
+                    startAction(action, listOf(document.note), from)
+                }, linkCandidates = model.cachedNotes(), onBacklinks = { showBacklinks = document.note.id },
+                onAttachmentManager = { model.openAttachmentManager(document.note.id) })
         }
     }
     history?.let { historyState ->
@@ -136,7 +201,7 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
                 onRestore = model::restoreRevision, onSaveRevision = model::saveCurrentVersion,
                 onRetry = model::retryHistory, onBack = model::historyBack, onDismiss = model::closeHistory,
                 resourceLoader = { path -> model.loadResource(path)?.let { EditorResource(it.mimeType, it.bytes) } },
-                serverUrl = model.serverUrl)
+                serverUrl = model.serverUrl, currentDocument = model.cachedDocument(note.id))
         }
     }
     attachmentUrl?.let { url ->
@@ -158,6 +223,46 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {}) {
             }
         }
     }
+    pendingAction?.let { request ->
+        val origins = if (request.action == LibraryAction.MOVE && request.sourceParentId == null && request.notes.size == 1)
+            model.sourceParents(request.notes.single()) else emptyList()
+        if (origins.size > 1) {
+            DestinationDialog(AppLanguage.get(context, R.string.library_origin), origins.map { NoteDestination(it, "") },
+                onPick = { pendingAction = request.copy(sourceParentId = it.id) }, onDismiss = { pendingAction = null })
+        } else {
+            val excluded = request.notes.map { it.id }.toSet()
+            DestinationDialog(AppLanguage.get(context, R.string.library_destination), model.destinations().filterNot { it.note.id in excluded },
+                onPick = { target ->
+                    pendingAction = null
+                    model.organize(request.action, request.notes, target.id, request.sourceParentId ?: origins.singleOrNull()?.id)
+                }, onDismiss = { pendingAction = null })
+        }
+    }
+    showBacklinks?.let { id -> BacklinksDialog(model.backlinks(id), onOpen = { showBacklinks = null; model.openById(it) }, onDismiss = { showBacklinks = null }) }
+    trash?.let { entries -> TrashSheet(entries, false, panelError, state.operationBusy,
+        onRestore = model::restoreFromTrash, onRetry = model::openTrash, onDismiss = model::closeTrash) }
+    attachmentList?.let { entries -> AttachmentManagerDialog(entries,
+        onRename = { attachment, title -> model.changeAttachment(attachment, title) },
+        onDelete = { model.changeAttachment(it, null) }, onDismiss = model::closeAttachmentManager,
+        busy = state.operationBusy, error = panelError ?: metadataEdits.error, onRetry = model::retryAttachmentManager,
+        onOpen = { openLink("api/attachments/${it.ownerId}/${it.id}/${Uri.encode(it.title)}") }) }
+    captures.firstOrNull { it.id !in dismissedCaptures }?.let { capture ->
+        val choices = model.destinations().flatMap { destination ->
+            val note = destination.note
+            val title = if (note.id == "root") AppLanguage.get(context, R.string.notes)
+                else listOf(destination.path, note.title).filter { it.isNotBlank() }.joinToString(" / ")
+            buildList {
+                add(CaptureDestination(note.id, title, true))
+                if (note.isEditable && (note.mime.substringBefore(';') == "text/html" || note.mime.contains("markdown", true)))
+                    add(CaptureDestination(note.id, title, false))
+            }
+        }
+        CaptureSheet(capture, model.serverUrl, choices, state.operationBusy, panelError,
+            onDismiss = { dismissedCaptures = dismissedCaptures + capture.id },
+            onSave = { title, parent, existing -> captureInbox?.let { inbox -> editorHandoff.run { model.saveCapture(inbox, capture, title, parent, existing) } } },
+            onDiscard = { scope.launch { withContext(Dispatchers.IO) { captureInbox?.discard(capture.id) } } },
+            accountMatches = capture.accountId == null || capture.accountId == model.accountId)
+    }
     linkError?.let { message ->
         AlertDialog(onDismissRequest = { linkError = null }, text = { Text(message) },
             confirmButton = { TextButton(onClick = { linkError = null }) { Text(AppLanguage.get(context, R.string.close)) } })
@@ -176,7 +281,7 @@ internal fun folderDisplayTitle(context: Context, folder: Folder): String =
 
 /** A separate saved scroll position for every folder path and exact search query. */
 internal fun libraryStateKey(state: NotesScreenState): String =
-    "library:" + state.folders.joinToString("/") { Uri.encode(it.id) } + "?" + Uri.encode(state.query)
+    "library:" + state.librarySection.name + ":" + state.folders.joinToString("/") { Uri.encode(it.id) } + "?" + Uri.encode(state.query)
 
 /** Scope only the list state: changing a search query must keep the search field focused. */
 @Composable
@@ -200,15 +305,47 @@ internal fun LibraryScreen(
     onCreateFolder: ((String) -> Unit)? = null,
     onConnectionSettings: (() -> Unit)? = null,
     uploadState: AttachmentUploadState = AttachmentUploadState(),
+    preferences: LibraryPreferencesState = LibraryPreferencesState(), collectionNotes: List<NoteMeta> = emptyList(),
+    onSection: (LibrarySection) -> Unit = {}, onFavorite: ((String) -> Unit)? = null,
+    onOrganize: ((LibraryAction, List<NoteMeta>, String?) -> Unit)? = null,
+    onSort: (NoteSort) -> Unit = {}, onReorder: ((List<String>) -> Unit)? = null,
+    onTrashMany: ((List<NoteMeta>) -> Unit)? = null, onTrash: (() -> Unit)? = null,
+    captureCount: Int = 0, onCaptures: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
     val searching = state.query.isNotBlank()
-    val busy = state.loading || state.searching
-    val hasVisibleItems = if (searching) state.results.isNotEmpty() else state.items.isNotEmpty()
+    val collection = state.librarySection != LibrarySection.NOTES && !searching
+    val busy = state.loading || state.searching || state.operationBusy
+    val order = preferences.sorts[state.folders.last().id] ?: NoteSort.MANUAL
+    val listed = when (order) {
+        NoteSort.MANUAL -> state.items
+        NoteSort.TITLE -> state.items.sortedWith(compareBy<TreeItem> { it.note.title.lowercase() }.thenBy { it.branchId })
+        NoteSort.MODIFIED -> state.items.sortedWith(compareByDescending<TreeItem> { it.note.modifiedAt.orEmpty() }.thenBy { it.branchId })
+    }
+    val visibleNotes = if (searching) state.results else if (collection) collectionNotes else listed.map { it.note }
+    val hasVisibleItems = visibleNotes.isNotEmpty()
     val inFolder = state.folders.size > 1
     val folder = state.folders.last()
     var deleteTarget by remember { mutableStateOf<NoteMeta?>(null) }
+    var selectionMode by rememberSaveable(folder.id, state.librarySection, state.query) { mutableStateOf(false) }
+    var selectedIds by rememberSaveable(folder.id, state.librarySection, state.query) { mutableStateOf(listOf<String>()) }
+    var bulkDelete by remember { mutableStateOf(false) }
+    var actionsExpanded by remember { mutableStateOf(false) }
+    var sortExpanded by remember { mutableStateOf(false) }
+    var showReorder by remember { mutableStateOf(false) }
+    val selected = visibleNotes.filter { it.id in selectedIds }
+    LaunchedEffect(visibleNotes.map { it.id }, busy) {
+        if (!busy && selectedIds.isNotEmpty()) {
+            selectedIds = selectedIds.filter { id -> visibleNotes.any { it.id == id } }
+            if (selectedIds.isEmpty()) selectionMode = false
+        }
+    }
+    fun toggleSelected(id: String) { selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id }
+    fun organize(action: LibraryAction, notes: List<NoteMeta>) {
+        onOrganize?.invoke(action, notes, folder.id.takeIf { !collection && !searching })
+    }
+    BackHandler(selectionMode) { selectionMode = false; selectedIds = emptyList() }
     var createMenuExpanded by remember { mutableStateOf(false) }
     var showFolderDialog by rememberSaveable { mutableStateOf(false) }
     var folderTitle by rememberSaveable { mutableStateOf("") }
@@ -224,8 +361,12 @@ internal fun LibraryScreen(
             Column(Modifier.statusBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(start = if (inFolder) 4.dp else 22.dp, end = 8.dp, top = 10.dp, bottom = 12.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    if (inFolder) {
-                        IconButton(onClick = { dismissKeyboard(); onBack() }) {
+                    if (inFolder || selectionMode || collection) {
+                        IconButton(onClick = {
+                            dismissKeyboard()
+                            if (selectionMode) { selectionMode = false; selectedIds = emptyList() }
+                            else if (collection) onSection(LibrarySection.NOTES) else onBack()
+                        }) {
                             Icon(Icons.AutoMirrored.Outlined.ArrowBack, AppLanguage.get(context, R.string.back))
                         }
                         Spacer(Modifier.width(4.dp))
@@ -238,19 +379,57 @@ internal fun LibraryScreen(
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Spacer(Modifier.height(3.dp))
                         }
-                        Text(folderDisplayTitle(context, folder), style = MaterialTheme.typography.titleLarge,
+                        Text(if (selectionMode) AppLanguage.get(context, R.string.library_selected, selected.size)
+                            else if (collection) AppLanguage.get(context, if (state.librarySection == LibrarySection.FAVORITES) R.string.library_favorites else R.string.library_recent)
+                            else folderDisplayTitle(context, folder), style = MaterialTheme.typography.titleLarge,
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
-                    if (!inFolder && onConnectionSettings != null) {
+                    if (!selectionMode && !inFolder && onConnectionSettings != null) {
                         IconButton(onClick = { dismissKeyboard(); onConnectionSettings() },
                             enabled = !busy && !state.localWritePending && state.deletingNoteId == null,
                             modifier = Modifier.testTag("connection-settings")) {
                             Icon(Icons.Outlined.Settings, AppLanguage.get(context, R.string.connection_settings))
                         }
                     }
-                    if (inFolder) state.currentFolderNote?.let { note ->
+                    if (!selectionMode && !collection && inFolder) state.currentFolderNote?.let { note ->
                         NoteActionsMenu(note, onDelete?.let { { dismissKeyboard(); deleteTarget = note } },
                             enabled = !busy && state.deletingNoteId == null)
+                    }
+                    Box {
+                        IconButton(onClick = { actionsExpanded = true }, enabled = !busy,
+                            modifier = Modifier.testTag("library-actions")) {
+                            Icon(Icons.Outlined.MoreVert, AppLanguage.get(context, R.string.library_actions))
+                        }
+                        DropdownMenu(expanded = actionsExpanded, onDismissRequest = { actionsExpanded = false }) {
+                            if (selectionMode) {
+                                DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.library_select_all)) },
+                                    onClick = { selectedIds = visibleNotes.filter { it.canDelete }.map { it.id }; actionsExpanded = false })
+                                for ((action, label) in listOf(LibraryAction.MOVE to R.string.library_move, LibraryAction.COPY to R.string.library_copy, LibraryAction.CLONE to R.string.library_clone)) {
+                                    DropdownMenuItem(text = { Text(AppLanguage.get(context, label)) }, enabled = selected.isNotEmpty(),
+                                        onClick = { actionsExpanded = false; organize(action, selected) })
+                                }
+                                DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.delete), color = colors.error) }, enabled = selected.isNotEmpty(),
+                                    onClick = { actionsExpanded = false; bulkDelete = true })
+                            } else {
+                                if (!searching && !collection && onTrashMany != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.library_select)) },
+                                    onClick = { selectionMode = true; actionsExpanded = false })
+                                if (!searching && !collection) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.library_sort)) },
+                                    onClick = { actionsExpanded = false; sortExpanded = true })
+                                if (onTrash != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.library_trash)) },
+                                    onClick = { actionsExpanded = false; onTrash() })
+                                if (captureCount > 0) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.library_receiving) + " ($captureCount)") },
+                                    onClick = { actionsExpanded = false; onCaptures() })
+                            }
+                        }
+                        DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
+                            for ((sort, label) in listOf(NoteSort.MANUAL to R.string.library_sort_manual, NoteSort.TITLE to R.string.library_sort_title, NoteSort.MODIFIED to R.string.library_sort_modified)) {
+                                DropdownMenuItem(text = { Text(AppLanguage.get(context, label)) },
+                                    leadingIcon = if (order == sort) ({ Icon(Icons.Outlined.Check, null) }) else null,
+                                    onClick = { sortExpanded = false; onSort(sort) })
+                            }
+                            if (onReorder != null && listed.size > 1) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.library_reorder)) },
+                                onClick = { sortExpanded = false; showReorder = true })
+                        }
                     }
                     SyncStatusControl(sync, offline, state.networkAvailable, state.fromCache,
                         onRefresh = { dismissKeyboard(); onRefresh() },
@@ -294,6 +473,16 @@ internal fun LibraryScreen(
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("note-list"), state = listState,
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 100.dp)) {
+            if (!inFolder && !searching && !selectionMode) {
+                item(key = "collections") {
+                    Row(Modifier.fillMaxWidth().padding(bottom = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for ((section, label) in listOf(LibrarySection.NOTES to R.string.notes, LibrarySection.FAVORITES to R.string.library_favorites, LibrarySection.RECENT to R.string.library_recent)) {
+                            FilterChip(selected = state.librarySection == section, onClick = { onSection(section) },
+                                label = { Text(AppLanguage.get(context, label)) }, modifier = Modifier.testTag("section-${section.name}"))
+                        }
+                    }
+                }
+            }
             if (uploadState.pendingCount > 0 || uploadState.error != null) {
                 item(key = "attachment-uploads") { AttachmentUploadStatus(uploadState, onSync) }
             }
@@ -322,14 +511,14 @@ internal fun LibraryScreen(
             if (state.error != null) {
                 item(key = "load-error") { MessageCard(state.error, onRetry = onRefresh) }
             }
-            if (searching || inFolder) {
+            if (searching || (inFolder && !collection)) {
                 item(key = "list-heading") {
                     Row(Modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("library-section-heading"),
                         verticalAlignment = Alignment.CenterVertically) {
                         Text(if (searching) AppLanguage.get(context, R.string.search_results) else AppLanguage.get(context, R.string.child_notes),
                             style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant,
                             modifier = Modifier.weight(1f))
-                        val count = if (searching) state.results.size else state.items.size
+                        val count = visibleNotes.size
                         if (!busy && (state.error == null || count > 0))
                             Text(count.toString(), style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
                     }
@@ -350,32 +539,39 @@ internal fun LibraryScreen(
                 item(key = "reset-failed-search") {
                     TextButton(onClick = ::clearSearch) { Text(AppLanguage.get(context, R.string.reset_search)) }
                 }
-            } else if ((searching && state.results.isEmpty()) || (!searching && state.items.isEmpty())) {
+            } else if (visibleNotes.isEmpty()) {
                 item(key = "empty") {
                     Column(Modifier.fillMaxWidth().padding(vertical = 36.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(if (state.error != null) Icons.Outlined.CloudOff else if (searching) Icons.Outlined.SearchOff else Icons.Outlined.Description, null,
                             Modifier.size(32.dp), tint = colors.onSurfaceVariant)
                         Spacer(Modifier.height(14.dp))
-                        Text(if (state.error != null) AppLanguage.get(context, R.string.no_notes_to_show) else if (searching) AppLanguage.get(context, R.string.nothing_found) else if (inFolder) AppLanguage.get(context, R.string.no_child_notes) else AppLanguage.get(context, R.string.no_notes_yet),
+                        Text(if (state.error != null) AppLanguage.get(context, R.string.no_notes_to_show) else if (searching) AppLanguage.get(context, R.string.nothing_found) else if (collection) AppLanguage.get(context, if (state.librarySection == LibrarySection.FAVORITES) R.string.library_empty_favorites else R.string.library_empty_recent) else if (inFolder) AppLanguage.get(context, R.string.no_child_notes) else AppLanguage.get(context, R.string.no_notes_yet),
                             color = colors.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
                         if (searching) TextButton(onClick = ::clearSearch) { Text(AppLanguage.get(context, R.string.reset_search)) }
-                        else if (state.error == null) TextButton(onClick = onCreate) { Text(AppLanguage.get(context, R.string.create_note)) }
+                        else if (state.error == null && !collection) TextButton(onClick = onCreate) { Text(AppLanguage.get(context, R.string.create_note)) }
                     }
                 }
-            } else if (searching) {
-                items(state.results, key = { "result-${it.id}" }) { note ->
+            } else if (searching || collection) {
+                items(visibleNotes, key = { "result-${it.id}" }) { note ->
                     NoteRow(note, "", onOpen = { openNote(note) }, onFolder = { openFolder(note) },
                         onDelete = onDelete?.let { { dismissKeyboard(); deleteTarget = note } },
-                        deleteEnabled = state.deletingNoteId == null)
+                        deleteEnabled = !state.operationBusy && state.deletingNoteId == null,
+                        favorite = note.id in preferences.favorites, onFavorite = onFavorite?.let { { it(note.id) } },
+                        onOrganize = onOrganize?.let { { action -> organize(action, listOf(note)) } })
                 }
             } else {
-                items(state.items, key = { "branch-${it.branchId}" }) { item ->
+                items(listed, key = { "branch-${it.branchId}" }) { item ->
                     NoteRow(item.note, item.prefix, onOpen = { openNote(item.note) }, onFolder = { openFolder(item.note) },
                         onDelete = onDelete?.let { { dismissKeyboard(); deleteTarget = item.note } },
-                        deleteEnabled = state.deletingNoteId == null)
+                        deleteEnabled = !state.operationBusy && state.deletingNoteId == null,
+                        selected = if (selectionMode) item.note.id in selectedIds else null,
+                        onSelect = { toggleSelected(item.note.id) },
+                        onLongSelect = if (onTrashMany != null) ({ selectionMode = true; toggleSelected(item.note.id) }) else null,
+                        favorite = item.note.id in preferences.favorites, onFavorite = onFavorite?.let { { it(item.note.id) } },
+                        onOrganize = onOrganize?.let { { action -> organize(action, listOf(item.note)) } })
                 }
             }
-            if (!searching && inFolder && state.currentFolderHasContent == true) {
+            if (!searching && !collection && !selectionMode && inFolder && state.currentFolderHasContent == true) {
                 item(key = "folder-content") {
                     FolderContentRow(state.currentFolderNote, enabled = !busy,
                         onOpen = { dismissKeyboard(); onOpenFolderContent() })
@@ -383,6 +579,12 @@ internal fun LibraryScreen(
             }
         }
     }
+    if (showReorder) ReorderDialog(state.items, onSave = { showReorder = false; onReorder?.invoke(it) }, onDismiss = { showReorder = false })
+    if (bulkDelete) AlertDialog(onDismissRequest = { bulkDelete = false },
+        title = { Text(AppLanguage.get(context, R.string.library_trash_title)) },
+        text = { Text(AppLanguage.get(context, R.string.library_bulk_trash_message, selected.size)) },
+        confirmButton = { TextButton(onClick = { bulkDelete = false; onTrashMany?.invoke(selected); selectionMode = false; selectedIds = emptyList() }) { Text(AppLanguage.get(context, R.string.library_trash)) } },
+        dismissButton = { TextButton(onClick = { bulkDelete = false }) { Text(AppLanguage.get(context, R.string.cancel)) } })
     if (showFolderDialog) {
         val titleFocus = remember { FocusRequester() }
         LaunchedEffect(Unit) { titleFocus.requestFocus() }
@@ -459,17 +661,24 @@ internal fun noteKind(context: Context, note: NoteMeta): String = when {
     else -> AppLanguage.get(context, R.string.kind_special)
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun NoteRow(note: NoteMeta, prefix: String, onOpen: () -> Unit, onFolder: () -> Unit,
-    onDelete: (() -> Unit)? = null, deleteEnabled: Boolean = true) {
+    onDelete: (() -> Unit)? = null, deleteEnabled: Boolean = true,
+    selected: Boolean? = null, onSelect: (() -> Unit)? = null, onLongSelect: (() -> Unit)? = null,
+    favorite: Boolean = false, onFavorite: (() -> Unit)? = null,
+    onOrganize: ((LibraryAction) -> Unit)? = null,
+) {
     val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
     val folder = note.childBranchIds.isNotEmpty() || note.type == "book"
     Row(Modifier.fillMaxWidth().testTag("note-row-${note.id}").clip(RoundedCornerShape(12.dp))
-        .clickable(onClickLabel = if (folder) AppLanguage.get(context, R.string.open_child_notes) else AppLanguage.get(context, R.string.open_note),
-            onClick = if (folder) onFolder else onOpen)
+        .combinedClickable(onClickLabel = if (folder) AppLanguage.get(context, R.string.open_child_notes) else AppLanguage.get(context, R.string.open_note),
+            onLongClick = if (deleteEnabled && note.canDelete) onLongSelect else null,
+            onClick = { if (selected != null) onSelect?.invoke() else if (folder) onFolder() else onOpen() })
         .heightIn(min = 68.dp).padding(vertical = 13.dp, horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(39.dp).clip(RoundedCornerShape(11.dp)).background(colors.surfaceVariant), contentAlignment = Alignment.Center) {
+        if (selected != null) Checkbox(checked = selected, onCheckedChange = { onSelect?.invoke() })
+        else Box(Modifier.size(39.dp).clip(RoundedCornerShape(11.dp)).background(colors.surfaceVariant), contentAlignment = Alignment.Center) {
             Icon(if (folder) Icons.Outlined.FolderOpen else when (note.type) {
                 "code", "mermaid" -> Icons.Outlined.Code
                 "image" -> Icons.Outlined.Image
@@ -491,9 +700,9 @@ internal fun NoteRow(note: NoteMeta, prefix: String, onOpen: () -> Unit, onFolde
                     style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
             }
         }
-        if (onDelete != null && note.canDelete) {
-            NoteActionsMenu(note, onDelete, deleteEnabled)
-        } else if (folder) Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+        if (selected == null && ((onDelete != null && note.canDelete) || onFavorite != null)) {
+            NoteActionsMenu(note, onDelete, deleteEnabled, favorite = favorite, onFavorite = onFavorite, onOrganize = onOrganize)
+        } else if (selected == null && folder) Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
             Icon(Icons.Outlined.ChevronRight, null, tint = colors.onSurfaceVariant)
         }
     }
@@ -513,7 +722,17 @@ internal fun EditorScreen(
     serverUrl: String = "",
     onHistory: (() -> Unit)? = null,
     onAttachment: ((Uri, Boolean) -> Unit)? = null,
+    onAttachmentAtCursor: ((Uri, Boolean, String?) -> Unit)? = null,
+    onPrepareAttachment: ((() -> Unit, () -> Unit) -> Unit) = { ready, _ -> ready() },
+    onCancelAttachment: () -> Unit = {}, onRecoverAttachment: (String?) -> Unit = {},
+    favorite: Boolean = false, onFavorite: (() -> Unit)? = null,
+    onOrganize: ((LibraryAction) -> Unit)? = null,
+    linkCandidates: List<NoteMeta> = emptyList(), onBacklinks: (() -> Unit)? = null,
+    onAttachmentManager: (() -> Unit)? = null,
     onAttachmentPickStarted: () -> Unit = {},
+    attachmentPickerController: AttachmentPickerController? = null,
+    externalAttachmentAnchor: String? = null, onAttachmentAnchor: (String?) -> Unit = {},
+    editorHandoff: EditorHandoff? = null,
     onEditingChanged: (Boolean) -> Unit = {},
     uploadState: AttachmentUploadState = AttachmentUploadState(),
 ) {
@@ -543,6 +762,20 @@ internal fun EditorScreen(
     DisposableEffect(document.note.id) { onDispose { latestEditingChanged.value(false) } }
     var flushing by remember { mutableStateOf(false) }
     var showDeleteConfirmation by remember(document.note.id) { mutableStateOf(false) }
+    var showLinkPicker by remember { mutableStateOf(false) }
+    var attachmentAnchor by rememberSaveable(document.note.id) { mutableStateOf<String?>(null) }
+    var awaitingAttachmentStage by rememberSaveable { mutableStateOf(false) }
+    var sawAttachmentStaging by remember { mutableStateOf(false) }
+    LaunchedEffect(state.uploadStaging) {
+        if (state.uploadStaging) sawAttachmentStaging = true
+        else if (sawAttachmentStaging && awaitingAttachmentStage) {
+            attachmentAnchor = null; awaitingAttachmentStage = false; sawAttachmentStaging = false
+        }
+    }
+    val activeAnchor = if (attachmentPickerController != null) externalAttachmentAnchor else attachmentAnchor
+    LaunchedEffect(editing, state.uploadStaging, state.operationBusy, state.localWritePending, activeAnchor) {
+        if (!editing && !state.uploadStaging && onAttachmentAtCursor != null) onRecoverAttachment(activeAnchor)
+    }
     fun finishEditing(after: () -> Unit = onSync) {
         if (flushing || state.operationBusy) return
         flushing = true
@@ -554,6 +787,12 @@ internal fun EditorScreen(
             flushing = false
             after()
         }
+    }
+    val latestFinish = rememberUpdatedState<(()->Unit)->Unit> { after -> finishEditing(after) }
+    DisposableEffect(editorHandoff) {
+        val action: (()->Unit)->Unit = { after -> latestFinish.value(after) }
+        editorHandoff?.finish = action
+        onDispose { if (editorHandoff?.finish === action) editorHandoff.finish = null }
     }
     fun closeSearch() {
         searchVisible = false
@@ -606,13 +845,29 @@ internal fun EditorScreen(
                 if (document.pending && !flushing && !state.operationBusy && !state.localWritePending && !conflict) {
                     PendingNoteStatusControl(sync, state.networkAvailable, onSync)
                 }
-                if (canAttach && onAttachment != null) {
+                if (canAttach && (onAttachment != null || onAttachmentAtCursor != null)) {
                     AttachmentPicker(enabled = !flushing && !state.operationBusy && !state.uploadStaging && state.deletingNoteId == null,
-                        onPickStarted = {
-                            onAttachmentPickStarted()
-                            closeSearch()
-                            finishEditing(after = {})
-                        }, onPicked = onAttachment)
+                        onPickStarted = { onAttachmentPickStarted(); closeSearch() },
+                        preparePick = { launch ->
+                            if (editing && onAttachmentAtCursor != null) {
+                                val anchor = UUID.randomUUID().toString()
+                                editorController.saveSelection {
+                                    editorController.reserveAttachment(anchor, AppLanguage.get(context, R.string.attachment)) { reserved ->
+                                        if (reserved) {
+                                            attachmentAnchor = anchor; onAttachmentAnchor(anchor)
+                                            onPrepareAttachment({ finishEditing(launch) }, { attachmentAnchor = null; onAttachmentAnchor(null); onCancelAttachment() })
+                                        }
+                                    }
+                                }
+                            } else finishEditing(launch)
+                        },
+                        onPicked = { uri, inlineImage ->
+                            if (onAttachmentAtCursor != null) {
+                                awaitingAttachmentStage = true
+                                onAttachmentAtCursor(uri, inlineImage, attachmentAnchor)
+                            } else onAttachment?.invoke(uri, inlineImage)
+                        }, onCancelled = { attachmentAnchor = null; onAttachmentAnchor(null); onCancelAttachment() },
+                        controller = attachmentPickerController)
                 }
                 if (!readOnly) {
                     if (editing) TextButton(onClick = { finishEditing() }, enabled = !flushing && !state.operationBusy) {
@@ -633,7 +888,12 @@ internal fun EditorScreen(
                     onHistory = if (searchable && onHistory != null) ({
                         closeSearch()
                         finishEditing(onHistory)
-                    }) else null)
+                    }) else null,
+                    favorite = favorite, onFavorite = onFavorite,
+                    onOrganize = onOrganize?.let { action -> { kind -> finishEditing { action(kind) } } },
+                    onInsertLink = if (canAttach && editing) ({ editorController.saveSelection { saved -> if (saved) showLinkPicker = true } }) else null,
+                    onBacklinks = onBacklinks?.let { { finishEditing(it) } },
+                    onAttachments = if (canAttach) onAttachmentManager?.let { { finishEditing(it) } } else null)
             }, colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.background))
         },
     ) { padding ->
@@ -658,7 +918,9 @@ internal fun EditorScreen(
                     modifier = Modifier.padding(horizontal = 20.dp))
             }
             key(document.note.id, state.editorEpoch) {
-                if (document.note.isProtected || (readOnly && !htmlNote && !attachment)) {
+                if (!document.note.isProtected && (document.note.type == "canvas" || (document.note.type == "mermaid" && !editing))) {
+                    DiagramViewer(document.note.id, document.note.type, document.html, Modifier.fillMaxWidth().weight(1f))
+                } else if (document.note.isProtected || (readOnly && !htmlNote && !attachment)) {
                     SpecialNoteContent(document.note, initialHtml, onOpenLink, Modifier.fillMaxWidth().weight(1f), serverUrl)
                 } else if (attachment) {
                     AttachmentViewer(document.note, attachmentLoader, Modifier.fillMaxWidth().weight(1f))
@@ -706,6 +968,9 @@ internal fun EditorScreen(
             }
         }
     }
+    if (showLinkPicker) NoteLinkPicker(linkCandidates.filterNot { it.id == document.note.id },
+        onPick = { target -> showLinkPicker = false; editorController.insertNoteLink(target.id, target.title) },
+        onDismiss = { showLinkPicker = false })
     if (showDeleteConfirmation) {
         DeleteNoteDialog(document.note, onDismiss = { showDeleteConfirmation = false }, onConfirm = {
             showDeleteConfirmation = false
@@ -718,10 +983,13 @@ internal fun EditorScreen(
 private fun NoteActionsMenu(
     note: NoteMeta, onDelete: (() -> Unit)?, enabled: Boolean = true,
     deleteEnabled: Boolean = true, onSearch: (() -> Unit)? = null, onHistory: (() -> Unit)? = null,
+    favorite: Boolean = false, onFavorite: (() -> Unit)? = null,
+    onOrganize: ((LibraryAction) -> Unit)? = null, onInsertLink: (() -> Unit)? = null,
+    onBacklinks: (() -> Unit)? = null, onAttachments: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val hasDelete = onDelete != null && note.canDelete
-    if (!hasDelete && onSearch == null && onHistory == null) return
+    if (!hasDelete && onSearch == null && onHistory == null && onFavorite == null && onBacklinks == null) return
     var expanded by remember(note.id) { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }, enabled = enabled,
@@ -735,6 +1003,19 @@ private fun NoteActionsMenu(
             if (onHistory != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.history_title)) },
                 leadingIcon = { Icon(Icons.Outlined.History, null) }, modifier = Modifier.testTag("note-history"),
                 onClick = { expanded = false; onHistory() })
+            if (onFavorite != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, if (favorite) R.string.library_favorite_remove else R.string.library_favorite_add)) },
+                leadingIcon = { Icon(if (favorite) Icons.Outlined.Star else Icons.Outlined.StarBorder, null) },
+                modifier = Modifier.testTag("note-favorite"), onClick = { expanded = false; onFavorite() })
+            if (onInsertLink != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.editor_insert_note_link)) },
+                leadingIcon = { Icon(Icons.Outlined.Link, null) }, modifier = Modifier.testTag("note-insert-link"), onClick = { expanded = false; onInsertLink() })
+            if (onBacklinks != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.editor_backlinks)) },
+                leadingIcon = { Icon(Icons.Outlined.Link, null) }, onClick = { expanded = false; onBacklinks() })
+            if (onAttachments != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.editor_attachments)) },
+                leadingIcon = { Icon(Icons.Outlined.AttachFile, null) }, modifier = Modifier.testTag("note-attachments"), onClick = { expanded = false; onAttachments() })
+            if (onOrganize != null && note.canDelete) for ((action, label) in listOf(LibraryAction.MOVE to R.string.library_move, LibraryAction.COPY to R.string.library_copy, LibraryAction.CLONE to R.string.library_clone)) {
+                DropdownMenuItem(text = { Text(AppLanguage.get(context, label)) }, enabled = deleteEnabled,
+                    onClick = { expanded = false; onOrganize(action) })
+            }
             if (hasDelete) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.delete), color = MaterialTheme.colorScheme.error) },
                 leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error) }, enabled = deleteEnabled,
                 onClick = { expanded = false; onDelete?.invoke() })
@@ -765,16 +1046,8 @@ private fun AttachmentUploadStatus(state: AttachmentUploadState, onRetry: () -> 
 private fun DeleteNoteDialog(note: NoteMeta, onDismiss: () -> Unit, onConfirm: () -> Unit) {
     val context = LocalContext.current
     AlertDialog(onDismissRequest = onDismiss, modifier = Modifier.testTag("delete-note-dialog"),
-        title = { Text(AppLanguage.get(context, R.string.delete_title, note.title.ifBlank { AppLanguage.get(context, R.string.untitled) })) },
-        text = {
-            Text(buildString {
-                append(AppLanguage.get(context, R.string.delete_all_folders))
-                if (note.childBranchIds.isNotEmpty()) {
-                    append(AppLanguage.get(context, R.string.delete_children))
-                }
-                append(AppLanguage.get(context, R.string.delete_sync_message))
-            })
-        },
+        title = { Text(AppLanguage.get(context, R.string.library_trash_title)) },
+        text = { Text(note.title + "\n\n" + AppLanguage.get(context, R.string.library_trash_message)) },
         confirmButton = {
             TextButton(onClick = onConfirm, modifier = Modifier.testTag("confirm-delete-note")) {
                 Text(AppLanguage.get(context, R.string.delete), color = MaterialTheme.colorScheme.error)

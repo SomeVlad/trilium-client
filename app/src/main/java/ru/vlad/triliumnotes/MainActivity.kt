@@ -1,6 +1,10 @@
 package ru.vlad.triliumnotes
 
 import android.content.Context
+import android.content.Intent
+import ru.vlad.triliumnotes.capture.CaptureInbox
+import ru.vlad.triliumnotes.capture.QuickNoteWidget
+import ru.vlad.triliumnotes.capture.QuickNoteRequest
 import androidx.compose.ui.platform.LocalContext
 import android.net.ConnectivityManager
 import android.net.Network
@@ -28,6 +32,8 @@ import ru.vlad.triliumnotes.ui.NotesTheme
 class MainActivity : ComponentActivity() {
     private val connection: ConnectionViewModel by viewModels()
     private var model: NotesViewModel? = null
+    private val captureInbox by lazy { CaptureInbox(applicationContext) }
+    private var quickNoteRequest by mutableStateOf<String?>(null)
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     private var callbackRegistered = false
     private val connectionState = ConnectionState()
@@ -57,11 +63,13 @@ class MainActivity : ComponentActivity() {
         // Persist even when the automatic default already matches the explicit choice.
         AppLanguage.select(this, language)
         connection.refreshLanguage()
+        QuickNoteWidget.updateAll(this)
         if (previous != language) recreate()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        quickNoteRequest = QuickNoteRequest.restore(intent, savedInstanceState)
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current
@@ -73,20 +81,23 @@ class MainActivity : ComponentActivity() {
                     services == null -> ConnectionScreen(state.busy, state.error, state.storageFailed,
                         onResetStorage = connection::disconnect, onConnect = connection::connect,
                         onLanguageSelected = ::selectLanguage)
-                    else -> key(services) {
+                    else -> key(services.sessionId ?: services.serverUrl) {
                         val notes = remember { connection.notesModel(services) }
                         var settings by rememberSaveable { mutableStateOf(false) }
                         val sync by notes.syncState.collectAsStateWithLifecycle()
                         val uploads by notes.uploadState.collectAsStateWithLifecycle()
+                        val attachmentEdits by services.attachments.state.collectAsStateWithLifecycle()
                         DisposableEffect(notes) {
                             model = notes
                             notes.appStarted()
                             onDispose { if (model === notes) model = null }
                         }
-                        if (settings) ConnectionSettingsScreen(services.serverUrl, sync.pendingCount + uploads.pendingCount,
+                        if (settings) ConnectionSettingsScreen(services.serverUrl, sync.pendingCount + uploads.pendingCount + attachmentEdits.pendingCount,
                             state.busy, state.error, onBack = { settings = false }, onDisconnect = connection::disconnect,
                             onLanguageSelected = ::selectLanguage)
-                        else NotesApp(notes, onConnectionSettings = { settings = true })
+                        else NotesApp(notes, onConnectionSettings = { settings = true },
+                            captureInbox = captureInbox, quickNoteRequest = quickNoteRequest,
+                            onQuickNoteHandled = { quickNoteRequest = null })
                     }
                 }
                 state.legacySession?.let { session ->
@@ -105,8 +116,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureInbox.refresh()
+        QuickNoteRequest.fromIntent(intent)?.let { quickNoteRequest = it }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        QuickNoteRequest.save(outState, quickNoteRequest)
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onStart() {
         super.onStart()
+        captureInbox.refresh()
         if (!callbackRegistered) {
             callbackRegistered = true
             connectivity.registerDefaultNetworkCallback(networkCallback)

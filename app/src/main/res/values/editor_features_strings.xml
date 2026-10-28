@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="editor_insert_note_link">Ссылка на заметку</string>
+    <string name="editor_find_note">Найти заметку</string>
+    <string name="editor_backlinks">Обратные ссылки</string>
+    <string name="editor_no_backlinks">Среди сохранённых на устройстве заметок обратных ссылок нет.</string>
+    <string name="editor_attach_camera">Снять фото</string>
+    <string name="editor_attachment_pending">Загрузка вложения…</string>
+    <string name="editor_attachments">Вложения</string>
+    <string name="editor_no_attachments">Вложений нет</string>
+    <string name="editor_rename_attachment">Переименовать</string>
+    <string name="editor_delete_attachment">Удалить вложение</string>
+    <string name="editor_delete_attachment_confirmation">Удалить «%1$s» и его вставки из этой заметки? Ссылки из других заметок перестанут работать. Без сети удаление выполнится после синхронизации.</string>
+    <string name="editor_apply">Применить</string>
+    <string name="editor_attachment_retry">Операции с вложениями будут повторены при синхронизации.</string>
+    <string name="editor_attachment_storage_error">Не удалось прочитать очередь операций с вложениями. Заметки доступны; очередь сохранена для восстановления.</string>
+</resources>

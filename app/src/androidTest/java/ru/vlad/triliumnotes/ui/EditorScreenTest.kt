@@ -37,7 +37,8 @@ class EditorScreenTest {
         compose.onNodeWithContentDescription("Редактировать заметку").assertDoesNotExist()
         compose.onNodeWithTag("note-actions-synthetic-note").performClick()
         compose.onNodeWithText("Удалить").performClick()
-        compose.onNodeWithText("Удалить «Искусственная заметка»?").assertIsDisplayed()
+        compose.onNodeWithText("Переместить в корзину?").assertIsDisplayed()
+        compose.onNodeWithText("Искусственная заметка\n\nЗаметку можно восстановить из корзины. Удаление затронет её клоны и вложенные заметки без других родителей.").assertIsDisplayed()
         compose.onNodeWithText("Отмена").performClick()
         compose.runOnIdle { assertEquals(0, deletes); assertEquals(0, writes) }
         compose.onNodeWithTag("note-actions-synthetic-note").performClick()
@@ -224,7 +225,7 @@ class EditorScreenTest {
 
     @Test fun specialFormatsExplainTheirLimitAndRevealExactDataOnlyOnRequest() {
         val original = "{\n  \"nodes\": [{\"text\": \"Keep this exact data\"}]\n}"
-        val document = syntheticNote(original).let { it.copy(note = it.note.copy(type = "canvas", mime = "application/json")) }
+        val document = syntheticNote(original).let { it.copy(note = it.note.copy(type = "relationMap", mime = "application/json")) }
         var writes = 0
         var openedId: String? = null
         compose.setContent {

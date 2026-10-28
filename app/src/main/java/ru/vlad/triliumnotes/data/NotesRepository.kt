@@ -71,6 +71,37 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
             withDrafts(snapshot, parentId, cached.orEmpty()).filterNot { it.note.id in deleted || visible.isHidden(it.note.id) } else null
     }
 
+    fun hasPendingEdits(noteId: String): Boolean = store.pending[noteId]?.kind in setOf("create", "update", "copy-update", "restore")
+    fun cachedVisibleNotes(): List<NoteMeta> {
+        val snapshot = store
+        val visible = visibility(snapshot)
+        val deleted = deletionClosure(snapshot)
+        return snapshot.notes.values.asSequence().map { it.meta }
+            .filterNot { it.isProtected || it.id in deleted || visible.isHidden(it.id) }
+            .map { note -> snapshot.pending[note.id]?.let { note.copy(title = it.title) } ?: note }.toList()
+    }
+    fun cachedVisibleDocuments(): List<NoteDocument> {
+        val snapshot = store
+        val visible = visibility(snapshot)
+        val deleted = deletionClosure(snapshot)
+        return snapshot.notes.values.mapNotNull { stored ->
+            if (stored.html == null || stored.meta.isProtected || stored.meta.id in deleted || visible.isHidden(stored.meta.id)) null
+            else {
+                val pending = snapshot.pending[stored.meta.id]
+                NoteDocument(if (pending == null) stored.meta else stored.meta.copy(title = pending.title),
+                    pending?.html ?: stored.html, pending != null, pending?.conflict == true, pending?.remoteMissing == true)
+            }
+        }
+    }
+
+    /** New trash pauses resource work; legacy irreversible tombstones retain their old handling. */
+    fun isRecoverablyDeleted(noteId: String): Boolean {
+        val snapshot = store
+        val recoverableRoots = snapshot.trash.keys.intersect(snapshot.deleted)
+        if (recoverableRoots.isEmpty() || noteId !in deletionClosure(snapshot)) return false
+        return noteId !in deletionClosure(snapshot, seeds = snapshot.deleted - recoverableRoots)
+    }
+
     fun isDeleted(noteId: String): Boolean = noteId in deletionClosure(store)
     internal fun isLocalCreate(noteId: String): Boolean = store.pending[noteId]?.kind == "create"
     fun isHidden(noteId: String): Boolean = isDeleted(noteId) || visibility(store).isHidden(noteId)
@@ -100,7 +131,8 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
                 if (parentId in next.deleted) return@change
                 val available = fetched.filterNot { it.note.id in next.deleted }
                 if (next.notes[parentId]?.html == null) next.notes[parentId] = StoredNote(result.parent, null)
-                next.children[parentId] = available
+                next.children[parentId] = overlayTree(next, parentId, available)
+                if (result.failedBranchIds.isEmpty()) next.completeChildren += parentId
                 available.forEach { item ->
                     val old = next.notes[item.note.id]
                     // A metadata-only tree refresh cannot update the edit baseline of
@@ -278,13 +310,15 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
             val markdown = stored.meta.mime.substringBefore(';').trim().lowercase().let {
                 it.startsWith("text/") && it.endsWith("markdown")
             }
+            val updated = if (upload.insertionAnchor == null) body + attachmentReference(upload, attachment, markdown)
+                else replaceAttachmentPlaceholder(body, upload, attachment, markdown) ?: throw AttachmentInsertionDeferred()
             next.counter++
             next.pending[noteId] = Pending(
                 kind = old?.kind ?: "update", noteId = noteId,
                 branchId = old?.branchId,
                 parentId = old?.parentId ?: stored.meta.parentNoteIds.firstOrNull(),
                 title = old?.title ?: stored.meta.title,
-                html = body + attachmentReference(upload, attachment, markdown),
+                html = updated,
                 baseTitle = if (old?.kind == "create") old.baseTitle else old?.baseTitle ?: stored.meta.title,
                 baseHash = if (old?.kind == "create") old.baseHash else old?.baseHash ?: digest(requireNotNull(stored.html)),
                 revision = next.counter,
@@ -294,6 +328,60 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
             )
         }
         return requireNotNull(document(store, upload.noteId))
+    }
+
+    suspend fun rewriteAttachmentReferences(noteId: String, attachmentId: String, newTitle: String?): NoteDocument {
+        val current = cachedNote(noteId) ?: throw IOException("Open the note first")
+        val markdown = current.note.mime.substringBefore(';').trim().lowercase().endsWith("markdown")
+        return transformDraft(noteId) { body -> ru.vlad.triliumnotes.data.rewriteAttachmentReferences(body, attachmentId, newTitle, markdown) }
+    }
+
+    private suspend fun transformDraft(noteId: String, transform: (String) -> String): NoteDocument {
+        change { next ->
+            require(noteId !in deletionClosure(next))
+            val stored = requireNotNull(next.notes[noteId])
+            require(stored.meta.isEditable && stored.html != null)
+            val old = next.pending[noteId]
+            val updated = transform(old?.html ?: stored.html)
+            if (updated == (old?.html ?: stored.html)) return@change
+            next.counter++
+            next.pending[noteId] = Pending(old?.kind ?: "update", noteId, old?.branchId,
+                old?.parentId ?: stored.meta.parentNoteIds.firstOrNull(), old?.title ?: stored.meta.title,
+                updated,
+                if (old?.kind == "create") old.baseTitle else old?.baseTitle ?: stored.meta.title,
+                if (old?.kind == "create") old.baseHash else old?.baseHash ?: digest(stored.html),
+                next.counter, old?.conflict ?: false, old?.noteType ?: stored.meta.type,
+                old?.noteMime ?: stored.meta.mime, old?.remoteMissing ?: false)
+        }
+        return requireNotNull(cachedNote(noteId))
+    }
+
+    /** A capture ID is committed atomically with its text and survives process death. */
+    suspend fun appendCapturedText(noteId: String, captureId: String, html: String): NoteDocument {
+        require(captureId.matches(Regex("[A-Za-z0-9_-]{4,128}")))
+        change { next ->
+            val marker = "$noteId:$captureId"
+            if (marker in next.captures) return@change
+            require(noteId !in deletionClosure(next))
+            val stored = requireNotNull(next.notes[noteId])
+            require(stored.meta.isEditable && stored.html != null)
+            val old = next.pending[noteId]
+            next.counter++
+            next.pending[noteId] = Pending(old?.kind ?: "update", noteId, old?.branchId,
+                old?.parentId ?: stored.meta.parentNoteIds.firstOrNull(), old?.title ?: stored.meta.title,
+                (old?.html ?: stored.html) + html,
+                if (old?.kind == "create") old.baseTitle else old?.baseTitle ?: stored.meta.title,
+                if (old?.kind == "create") old.baseHash else old?.baseHash ?: digest(stored.html),
+                next.counter, old?.conflict ?: false, old?.noteType ?: stored.meta.type,
+                old?.noteMime ?: stored.meta.mime, old?.remoteMissing ?: false)
+            next.captures += marker
+        }
+        return requireNotNull(cachedNote(noteId))
+    }
+
+    suspend fun createWithId(parentId: String, title: String, html: String, noteId: String, branchId: String): NoteDocument {
+        require(noteId.matches(Regex("[A-Za-z0-9_]{4,32}")) && !noteId.startsWith('_') && branchId.matches(Regex("[A-Za-z0-9_]{4,65}")))
+        return stageCreate(parentId, title, html, "text", "text/html", noteId, branchId)
     }
 
     /** Stages a note with stable client IDs, so a lost create response cannot duplicate it. */
@@ -307,18 +395,19 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
     }
 
     private suspend fun stageCreate(parentId: String, title: String, html: String,
-        type: String, mime: String): NoteDocument {
-        val noteId = newId()
-        val branchId = newId()
+        type: String, mime: String, noteId: String = newId(), branchId: String = newId()): NoteDocument {
         change { next ->
             require(parentId !in deletionClosure(next)) { "Parent note is deleted" }
+            if (noteId in next.notes) return@change
             next.counter++
             val meta = NoteMeta(noteId, title, type, mime, false,
                 null, null, emptyList(), listOf(parentId))
             next.notes[noteId] = StoredNote(meta, "")
             next.pending[noteId] = Pending("create", noteId, branchId, parentId,
                 title, html, null, null, next.counter, noteType = type, noteMime = mime)
-            if (type == "book") next.children[noteId] = emptyList()
+            next.children[noteId] = emptyList()
+            next.completeChildren += noteId
+            next.attachments[noteId] = emptyList()
         }
         return requireNotNull(document(store, noteId))
     }
@@ -346,26 +435,593 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
         }
     }
 
+    /** Null means an unknown catalog; an empty list is a confirmed attachment-free note. */
+    fun cachedAttachments(noteId: String): List<AttachmentMeta>? =
+        if (isHidden(noteId)) null else store.attachments[noteId]?.toList()
+
+    /** Catalog completeness, including an empty list, is required for lossless offline copying. */
+    suspend fun rememberAttachments(noteId: String, items: List<AttachmentMeta>) = change { next ->
+        require(items.all { it.ownerId == noteId })
+        next.attachments[noteId] = items.toList()
+    }
+
+    suspend fun moveBranch(branchId: String, fromParentId: String, targetParentId: String) =
+        stageBranch("move", branchId, fromParentId, targetParentId)
+
+    suspend fun cloneBranch(branchId: String, fromParentId: String, targetParentId: String) =
+        stageBranch("clone", branchId, fromParentId, targetParentId)
+
+    private suspend fun stageBranch(kind: String, branchId: String, fromParentId: String, targetParentId: String) {
+        change { next ->
+            val item = next.children[fromParentId]?.firstOrNull { it.branchId == branchId }
+                ?: withDrafts(next, fromParentId, next.children[fromParentId].orEmpty()).firstOrNull { it.branchId == branchId }
+                ?: throw TreeOperationException(R.string.tree_load_first)
+            require(item.note.canDelete && !visibility(next).isHidden(item.note.id))
+            require(targetParentId !in deletionClosure(next) && item.note.id !in deletionClosure(next))
+            if (fromParentId == targetParentId) return@change
+            checkCachedCycle(next, item.note.id, targetParentId)
+            if (withDrafts(next, targetParentId, next.children[targetParentId].orEmpty()).any { it.note.id == item.note.id })
+                throw TreeOperationException(R.string.tree_already_there)
+            next.counter++
+            val op = TreeOperation(newId(), kind, item.note.id, fromParentId, targetParentId,
+                branchId, item.prefix, nextTreePosition(next, targetParentId), item.isExpanded, revision = next.counter)
+            next.treePending[op.id] = op
+            applyPlacement(next, op, "${targetParentId}_${item.note.id}")
+        }
+    }
+
+    /** Accepts the complete current sibling list, so omissions cannot silently reorder other notes. */
+    suspend fun reorderChildren(parentId: String, branchIds: List<String>) {
+        change { next ->
+            val current = withDrafts(next, parentId, next.children[parentId].orEmpty())
+                .filterNot { it.note.id in deletionClosure(next) || visibility(next).isHidden(it.note.id) }
+            require(branchIds.size == branchIds.distinct().size && branchIds.toSet() == current.map { it.branchId }.toSet())
+            require(parentId !in deletionClosure(next))
+            next.treePending.entries.removeAll { it.value.kind == "order" && it.value.targetParentId == parentId }
+            next.counter++
+            val byId = current.associateBy { it.branchId }
+            val op = TreeOperation(newId(), "order", parentId, targetParentId = parentId,
+                order = branchIds, orderNotes = branchIds.map { requireNotNull(byId[it]).note.id }, revision = next.counter)
+            next.treePending[op.id] = op
+            val hidden = next.children[parentId].orEmpty().filter { it.branchId !in byId }
+            next.children[parentId] = branchIds.mapIndexed { index, id -> requireNotNull(byId[id]).copy(position = (index + 1) * 10) } + hidden
+        }
+    }
+
+    /** Reject unknown ancestor paths: offline absence is not proof that no clone cycle exists. */
+    private fun checkCachedCycle(snapshot: Store, noteId: String, targetId: String) {
+        val visited = mutableSetOf<String>()
+        val queue = ArrayDeque<String>().apply { add(targetId) }
+        while (queue.isNotEmpty()) {
+            val id = queue.removeFirst()
+            if (id == noteId) throw TreeOperationException(R.string.tree_cycle)
+            if (id == "root" || id.startsWith('_') || !visited.add(id)) continue
+            val meta = snapshot.notes[id]?.meta ?: throw TreeOperationException(R.string.tree_load_first)
+            if (visibility(snapshot).isHidden(id)) throw HiddenNoteException()
+            val parents = meta.parentNoteIds.ifEmpty {
+                snapshot.children.filterValues { items -> items.any { it.note.id == id } }.keys.toList()
+            }
+            if (parents.isEmpty()) throw TreeOperationException(R.string.tree_load_first)
+            parents.forEach(queue::add)
+        }
+    }
+
+    private suspend fun checkRemoteCycle(noteId: String, targetId: String) {
+        val visited = mutableSetOf<String>()
+        val queue = ArrayDeque<String>().apply { add(targetId) }
+        while (queue.isNotEmpty()) {
+            val id = queue.removeFirst()
+            if (id == noteId) throw TreeOperationException(R.string.tree_cycle)
+            if (id == "root" || id.startsWith('_') || !visited.add(id)) continue
+            val note = api.getNote(id)
+            if (note.id.startsWith('_')) throw HiddenNoteException()
+            note.parentNoteIds.forEach(queue::add)
+        }
+    }
+
+    private fun nextTreePosition(snapshot: Store, parentId: String): Int =
+        (snapshot.children[parentId].orEmpty().maxOfOrNull { it.position } ?: 0).coerceAtMost(Int.MAX_VALUE - 20) + 10
+
+    private fun applyPlacement(next: Store, op: TreeOperation, actualBranchId: String) {
+        val meta = next.notes[op.noteId]?.meta ?: return
+        val oldParents = meta.parentNoteIds
+        val parents = (if (op.kind == "move") oldParents - op.fromParentId else oldParents) + op.targetParentId
+        val updated = meta.copy(parentNoteIds = parents.distinct())
+        next.notes[op.noteId] = requireNotNull(next.notes[op.noteId]).copy(meta = updated)
+        if (op.kind == "move") {
+            next.children[op.fromParentId] = next.children[op.fromParentId].orEmpty().filterNot { it.note.id == op.noteId }
+            // A local create must retain its original parent until the branch operation is confirmed remotely.
+        }
+        val item = TreeItem(actualBranchId, updated, op.prefix, op.position, op.expanded)
+        next.children[op.targetParentId] = (next.children[op.targetParentId].orEmpty().filterNot { it.note.id == op.noteId } + item)
+            .sortedWith(compareBy<TreeItem> { it.position }.thenBy { it.branchId })
+    }
+
+    private fun overlayTree(next: Store, parentId: String, remote: List<TreeItem>): List<TreeItem> {
+        var result = remote
+        next.treePending.values.sortedBy { it.revision }.forEach { op ->
+            if (op.kind in setOf("move", "clone")) {
+                if (op.kind == "move" && parentId == op.fromParentId) result = result.filterNot { it.note.id == op.noteId }
+                if (parentId == op.targetParentId) next.notes[op.noteId]?.meta?.let { meta ->
+                    val staged = next.children[parentId].orEmpty().firstOrNull { it.note.id == op.noteId }
+                        ?: TreeItem("${parentId}_${op.noteId}", meta, op.prefix, op.position, op.expanded)
+                    result = result.filterNot { it.note.id == op.noteId } + staged
+                }
+            }
+            if (op.kind == "copy") {
+                val ids = op.copyNodes.mapTo(mutableSetOf()) { it.id }
+                val staged = next.children[parentId].orEmpty().filter { it.note.id in ids }
+                staged.forEach { item -> if (result.none { it.note.id == item.note.id }) result = result + item }
+            }
+            if (op.kind == "order" && op.targetParentId == parentId) {
+                val indices = op.order.withIndex().associate { it.value to (it.index + 1) * 10 }
+                result = result.map { item -> indices[item.branchId]?.let { item.copy(position = it) } ?: item }
+            }
+        }
+        return result.sortedWith(compareBy<TreeItem> { it.position }.thenBy { it.branchId })
+    }
+
+    fun cachedTrash(): List<TrashItem> {
+        val snapshot = store
+        val items = snapshot.remoteTrash.toMutableMap()
+        val deleted = deletionClosure(snapshot)
+        snapshot.trash.forEach { (id, entry) ->
+            val restoring = snapshot.pending[id]?.kind == "restore"
+            val available = when {
+                entry.localOnly || !entry.deleteAttempted -> true
+                snapshot.remoteTrash[id] != null -> requireNotNull(snapshot.remoteTrash[id]).canRestore
+                else -> snapshot.notes[id]?.meta?.parentNoteIds.orEmpty().any {
+                    it !in weakParents && it !in deleted
+                }
+            }
+            items[id] = TrashItem(id, entry.title, entry.deletedAt, canRestore = !restoring && available,
+                localOnly = entry.localOnly, pending = snapshot.pending[id]?.kind in setOf("delete", "restore"), restoring = restoring)
+        }
+        return items.values.sortedWith(compareByDescending<TrashItem> { it.deletedAt.orEmpty() }.thenBy { it.noteId })
+    }
+
+    suspend fun listTrash(): List<TrashItem> {
+        try {
+            val remote = api.nativeTrash()
+            change { next ->
+                next.remoteTrash.clear()
+                remote.forEach { if (next.pending[it.noteId]?.kind != "restore") next.remoteTrash[it.noteId] = it }
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { if (cachedTrash().isEmpty()) throw offlineError(error) }
+        return cachedTrash()
+    }
+
+    /** New deletions retain the original body and draft; legacy delete tombstones stay unchanged. */
+    suspend fun trash(noteId: String) {
+        change { next ->
+            if (noteId in next.deleted) return@change
+            val note = next.notes[noteId] ?: throw TreeOperationException(R.string.tree_load_first)
+            require(note.meta.canDelete && !visibility(next).isHidden(noteId))
+            val previous = next.pending[noteId]
+            val localOnly = previous?.kind == "create" && previous.baseHash == null &&
+                next.treePending.values.none { it.kind == "copy" && it.copyNodes.any { node -> node.id == noteId } }
+            val entry = TrashRecord(previous?.title ?: note.meta.title, java.time.Instant.now().toString(),
+                previous, localOnly)
+            next.trash[noteId] = entry
+            next.deleted += noteId
+            next.pending.remove(noteId)
+            if (!localOnly) {
+                next.counter++
+                next.pending[noteId] = Pending("delete", noteId, null, null, "", "", null, null, next.counter)
+            }
+        }
+    }
+
+    suspend fun restore(noteId: String) {
+        change { next ->
+            val entry = next.trash[noteId]
+            val remote = next.remoteTrash[noteId]
+            require(entry != null || remote?.canRestore == true) { "This note cannot be restored" }
+            if (entry != null && (entry.localOnly || !entry.deleteAttempted)) {
+                next.deleted.remove(noteId)
+                next.pending.remove(noteId)
+                entry.draft?.let { next.pending[noteId] = it }
+                next.trash.remove(noteId)
+                next.remoteTrash.remove(noteId)
+            } else {
+                next.counter++
+                next.pending[noteId] = Pending("restore", noteId, null, null, "", "", null, null, next.counter)
+                // Keep remote restores in trash until confirmed; their retained drafts cannot be overwritten by edits.
+                next.deleted += noteId
+                next.remoteTrash.remove(noteId)
+                if (entry == null) next.trash[noteId] = TrashRecord(requireNotNull(remote).title,
+                    remote.deletedAt, null, false, true)
+            }
+        }
+    }
+
+    private suspend fun syncRestore(snapshot: Pending) {
+        val exists = try { api.getNote(snapshot.noteId) } catch (error: ApiException) {
+            if (error.status != 404) throw error
+            null
+        }
+        if (exists == null) api.etapiRequest("POST", listOf("notes", snapshot.noteId, "undelete"))
+        val remote = api.getNote(snapshot.noteId)
+        change { next ->
+            if (next.pending[snapshot.noteId]?.revision != snapshot.revision) return@change
+            next.deleted.remove(snapshot.noteId)
+            val restored = next.trash.remove(snapshot.noteId)
+            next.pending.remove(snapshot.noteId)
+            restored?.draft?.let { next.pending[snapshot.noteId] = it }
+            val old = next.notes[snapshot.noteId]
+            next.notes[snapshot.noteId] = StoredNote(remote, old?.html)
+            next.remoteTrash.remove(snapshot.noteId)
+        }
+    }
+
+    /** Bulk callers validate every selection before staging the first copy. This performs no writes. */
+    suspend fun validateCopySubtree(noteId: String, targetParentId: String) {
+        prepareCopySubtree(noteId, targetParentId, validateOnly = true)
+    }
+
+    suspend fun copySubtree(noteId: String, targetParentId: String): NoteDocument =
+        requireNotNull(prepareCopySubtree(noteId, targetParentId, validateOnly = false))
+
+    /** Snapshot a complete subtree before queuing anything; originals and their resources are never changed. */
+    private suspend fun prepareCopySubtree(noteId: String, targetParentId: String, validateOnly: Boolean): NoteDocument? = withContext(Dispatchers.IO) {
+        val baseline = store
+        require(noteId !in deletionClosure(baseline) && targetParentId !in deletionClosure(baseline))
+        if (visibility(baseline).isHidden(noteId) || visibility(baseline).isHidden(targetParentId)) throw HiddenNoteException()
+        if (targetParentId != "root" && baseline.notes[targetParentId] == null) throw TreeOperationException(R.string.tree_load_first)
+        val discovered = linkedMapOf<String, String>()
+        val edges = mutableListOf<Pair<String, TreeItem>>()
+        val queue = ArrayDeque<Pair<String, String>>().apply { add(noteId to targetParentId) }
+        while (queue.isNotEmpty()) {
+            val (id, parent) = queue.removeFirst()
+            if (id in discovered) continue
+            val note = baseline.notes[id] ?: throw TreeOperationException(R.string.tree_copy_download_first)
+            if (!note.meta.canDelete || note.meta.isProtected || note.meta.type == "doc")
+                throw TreeOperationException(R.string.tree_copy_protected)
+            if (note.html == null || id !in baseline.attachments ||
+                (id !in baseline.completeChildren && (id !in baseline.children ||
+                    !baseline.children[id].orEmpty().map { it.branchId }.containsAll(note.meta.childBranchIds))))
+                throw TreeOperationException(R.string.tree_copy_download_first)
+            if (baseline.pending[id]?.conflict == true) throw TreeOperationException(R.string.tree_copy_conflict)
+            val body = baseline.pending[id]?.html ?: note.html
+            if (body.contains("#pocket-upload-")) throw TreeOperationException(R.string.tree_copy_upload_first)
+            discovered[id] = parent
+            val children = withDrafts(baseline, id, baseline.children[id].orEmpty())
+                .filterNot { it.note.id in deletionClosure(baseline) || visibility(baseline).isHidden(it.note.id) }
+            children.forEach { item -> edges += id to item; queue.add(item.note.id to id) }
+        }
+        val knownAttachmentIds = baseline.attachments.values.flatten().mapTo(mutableSetOf()) { it.id }
+        discovered.keys.forEach { id ->
+            val source = requireNotNull(baseline.notes[id])
+            val body = baseline.pending[id]?.html ?: source.html.orEmpty()
+            val markup = if (source.meta.mime.substringBefore(';').trim().endsWith("markdown"))
+                org.commonmark.renderer.html.HtmlRenderer.builder().build().render(org.commonmark.parser.Parser.builder().build().parse(body)) else body
+            org.jsoup.Jsoup.parseBodyFragment(markup).select("[href], [src], [poster]").forEach { element ->
+                listOf("href", "src", "poster").forEach { attribute ->
+                    val resource = resolveResourceTarget(element.attr(attribute), api.serverUrl)
+                    if (resource?.attachment == true && resource.id !in knownAttachmentIds)
+                        throw TreeOperationException(R.string.tree_copy_download_first)
+                }
+            }
+        }
+        val ids = discovered.keys.associateWith { newId() }
+        val nodes = discovered.map { (id, parent) ->
+            val source = requireNotNull(baseline.notes[id])
+            CopyNode(id, requireNotNull(ids[id]), ids[parent] ?: parent,
+                baseline.pending[id]?.title ?: source.meta.title, source.meta.type, source.meta.mime,
+                source.meta.attributes.filter { it.noteId.isBlank() || it.noteId == id }.map { attribute ->
+                    attribute.copy(id = newId(), noteId = requireNotNull(ids[id]),
+                        value = if (attribute.type == "relation") ids[attribute.value] ?: attribute.value else attribute.value)
+                })
+        }
+        val resources = mutableListOf<CopyResource>()
+        val resourceSources = mutableMapOf<String, File>()
+        val resourceDir = File(context.filesDir, "note-resources")
+        fun prepareResource(resource: CopyResource, version: String) {
+            val sourceKey = (if (resource.attachment) "attachment_" else "note_") + resource.originalId
+            val source = File(resourceDir, "$sourceKey.data")
+            val storedVersion = File(resourceDir, "$sourceKey.version")
+            if (!source.isFile || !File(resourceDir, "$sourceKey.mime").isFile ||
+                !storedVersion.isFile || storedVersion.readText() != version)
+                throw TreeOperationException(R.string.tree_copy_download_first)
+            resources += resource
+            resourceSources[resource.fileName] = source
+        }
+        nodes.forEach { node ->
+            val source = requireNotNull(baseline.notes[node.originalId])
+            if (!source.meta.hasTextContent || source.meta.type in setOf("image", "file")) {
+                prepareResource(CopyResource(node.originalId, node.id, node.id, false, node.mime, node.title),
+                    source.meta.blobId ?: source.meta.modifiedAt.orEmpty())
+            }
+            baseline.attachments[node.originalId].orEmpty().forEach { attachment ->
+                prepareResource(CopyResource(attachment.id, newId(), node.id, true, attachment.mime,
+                    attachment.title, attachment.role, attachment.position), attachment.blobId ?:
+                    listOf(source.meta.blobId.orEmpty(), source.meta.modifiedAt.orEmpty()).joinToString(":"))
+            }
+        }
+        if (validateOnly) return@withContext null
+        val idMap = ids + resources.filter { it.attachment }.associate { it.originalId to it.localId }
+        val opId = newId()
+        val folder = File(context.filesDir, "tree-copies/$opId").apply { mkdirs() }
+        try {
+            resources.forEach { resource ->
+                copyAtomic(requireNotNull(resourceSources[resource.fileName]), File(folder, resource.fileName))
+            }
+            // Prepare every viewer file before the atomic metadata commit makes the copy visible.
+            resources.forEach { resource ->
+                val key = (if (resource.attachment) "attachment_" else "note_") + resource.localId
+                copyAtomic(File(folder, resource.fileName), File(resourceDir, "$key.data"))
+                writeAtomicText(File(resourceDir, "$key.mime"), resource.mime)
+                writeAtomicText(File(resourceDir, "$key.version"), if (resource.attachment) ":" else "")
+            }
+            change { next ->
+                if (discovered.keys.any { baseline.notes[it] != next.notes[it] || baseline.pending[it] != next.pending[it] ||
+                        baseline.children[it] != next.children[it] || baseline.attachments[it] != next.attachments[it] })
+                    throw TreeOperationException(R.string.tree_changed)
+                require(targetParentId !in deletionClosure(next))
+                nodes.forEach { node ->
+                    val source = requireNotNull(baseline.notes[node.originalId])
+                    val body = remapCopyContent(baseline.pending[node.originalId]?.html ?: source.html.orEmpty(), idMap, node.type, api.serverUrl)
+                    val childEdges = edges.filter { it.first == node.originalId }
+                    val meta = source.meta.copy(id = node.id, title = node.title, blobId = null, modifiedAt = null,
+                        childBranchIds = childEdges.map { "${node.id}_${requireNotNull(ids[it.second.note.id])}" },
+                        parentNoteIds = (edges.filter { it.second.note.id == node.originalId }.map { requireNotNull(ids[it.first]) } + node.parentId).distinct(),
+                        attributes = node.attributes)
+                    next.notes[node.id] = StoredNote(meta, "")
+                    next.counter++
+                    next.pending[node.id] = Pending("create", node.id, "${node.parentId}_${node.id}", node.parentId,
+                        node.title, body, null, null, next.counter, noteType = node.type, noteMime = node.mime)
+                    next.children[node.id] = childEdges.map { (_, edge) ->
+                        edge.copy(branchId = "${node.id}_${requireNotNull(ids[edge.note.id])}",
+                            note = requireNotNull(baseline.notes[edge.note.id]).meta.copy(id = requireNotNull(ids[edge.note.id]),
+                                blobId = null, modifiedAt = null, parentNoteIds = listOf(node.id)))
+                    }
+                    next.completeChildren += node.id
+                    next.attachments[node.id] = resources.filter { it.attachment && it.ownerId == node.id }.map {
+                        AttachmentMeta(it.localId, node.id, it.role, it.mime, it.title, it.position)
+                    }
+                }
+                val root = nodes.first()
+                next.children[targetParentId] = next.children[targetParentId].orEmpty() + TreeItem(
+                    "${targetParentId}_${root.id}", requireNotNull(next.notes[root.id]).meta, "",
+                    nextTreePosition(next, targetParentId), false)
+                next.counter++
+                next.treePending[opId] = TreeOperation(opId, "copy", root.id, targetParentId = targetParentId,
+                    revision = next.counter, copyNodes = nodes, copyEdges = edges.map { (parent, edge) ->
+                        TreeBranch("${requireNotNull(ids[parent])}_${requireNotNull(ids[edge.note.id])}",
+                            requireNotNull(ids[edge.note.id]), requireNotNull(ids[parent]), edge.prefix, edge.position, edge.isExpanded)
+                    }, copyResources = resources)
+            }
+
+        } catch (error: Throwable) {
+            if (opId !in store.treePending) {
+                folder.deleteRecursively()
+                resources.forEach { resource ->
+                    val key = (if (resource.attachment) "attachment_" else "note_") + resource.localId
+                    listOf("data", "mime", "version").forEach { suffix -> AtomicFile(File(resourceDir, "$key.$suffix")).delete() }
+                }
+            }
+            throw error
+        }
+        requireNotNull(cachedNote(requireNotNull(ids[noteId])))
+    }
+
+    private suspend fun syncCopy(snapshot: TreeOperation) {
+        var operation = store.treePending[snapshot.id] ?: return
+        val folder = File(context.filesDir, "tree-copies/${operation.id}")
+        // Stable note IDs plus an empty shell baseline recover a lost create response.
+        operation.copyNodes.forEach { planned ->
+            if (planned.shellCreated) return@forEach
+            val existing = try { api.getNote(planned.id) } catch (error: ApiException) {
+                if (error.status != 404) throw error
+                null
+            }
+            if (existing == null) api.createNote(planned.id, planned.parentId, serverTitle(planned.title), "", planned.type, planned.mime)
+            else if (existing.type != planned.type || existing.mime != planned.mime ||
+                existing.title != serverTitle(planned.title) || planned.parentId !in existing.parentNoteIds)
+                throw TreeOperationException(R.string.tree_changed)
+            change { next ->
+                val current = next.treePending[operation.id] ?: return@change
+                next.treePending[operation.id] = current.copy(copyNodes = current.copyNodes.map {
+                    if (it.id == planned.id) it.copy(shellCreated = true) else it })
+            }
+        }
+        operation = store.treePending[snapshot.id] ?: return
+        operation.copyEdges.forEach { api.placeBranch(it) }
+        operation.copyNodes.forEach { node -> node.attributes.forEach { attribute ->
+            val existing = try { api.etapiRequest("GET", listOf("attributes", attribute.id)); true }
+                catch (error: ApiException) { if (error.status != 404) throw error; false }
+            if (!existing) api.etapiRequest("POST", listOf("attributes"), attribute.toJson().toString())
+        } }
+        operation.copyResources.forEach { planned ->
+            var resource = store.treePending[operation.id]?.copyResources?.first { it.localId == planned.localId } ?: return
+            val content = File(folder, resource.fileName)
+            if (!content.isFile) throw TreeOperationException(R.string.tree_copy_download_first)
+            if (resource.attachment) {
+                if (resource.remoteId == null) {
+                    val marker = ".trilium-android-copy-${operation.id}-${resource.localId}"
+                    val attachment = api.getAttachments(resource.ownerId).firstOrNull { it.title == marker }
+                        ?: api.createAttachment(resource.ownerId, resource.role, resource.mime, marker, resource.position)
+                    resource = resource.copy(remoteId = attachment.id)
+                    saveCopyResource(operation.id, resource)
+                }
+                if (!resource.uploaded) {
+                    api.putAttachmentContent(requireNotNull(resource.remoteId), content)
+                    resource = resource.copy(uploaded = true)
+                    saveCopyResource(operation.id, resource)
+                }
+                api.patchAttachmentTitle(requireNotNull(resource.remoteId), resource.title)
+            } else if (!resource.uploaded) {
+                api.etapiPutFile(listOf("notes", resource.ownerId, "content"), content)
+                resource = resource.copy(remoteId = resource.ownerId, uploaded = true)
+                saveCopyResource(operation.id, resource)
+            }
+        }
+        operation = store.treePending[snapshot.id] ?: return
+        val remap = operation.copyResources.filter { it.attachment }.associate { it.localId to requireNotNull(it.remoteId) }
+        val remoteNotes = operation.copyNodes.associate { it.id to api.getNote(it.id) }
+        val remoteCatalogs = operation.copyNodes.associate { it.id to api.getAttachments(it.id) }
+        operation.copyResources.filter { it.attachment }.forEach { resource ->
+            val key = "attachment_${requireNotNull(resource.remoteId)}"
+            val directory = File(context.filesDir, "note-resources").apply { mkdirs() }
+            copyAtomic(File(folder, resource.fileName), File(directory, "$key.data"))
+            writeAtomicText(File(directory, "$key.mime"), resource.mime)
+            val attachment = remoteCatalogs[resource.ownerId].orEmpty().firstOrNull { it.id == resource.remoteId }
+            val owner = requireNotNull(remoteNotes[resource.ownerId])
+            val version = attachment?.blobId ?: listOf(owner.blobId.orEmpty(), owner.modifiedAt.orEmpty()).joinToString(":")
+            writeAtomicText(File(directory, "$key.version"), version)
+        }
+        operation.copyResources.filterNot { it.attachment }.forEach { resource ->
+            val owner = requireNotNull(remoteNotes[resource.ownerId])
+            writeAtomicText(File(context.filesDir, "note-resources/note_${resource.ownerId}.version"), owner.blobId ?: owner.modifiedAt.orEmpty())
+        }
+        change { next ->
+            operation.copyNodes.forEach { node ->
+                val remote = requireNotNull(remoteNotes[node.id])
+                val old = next.notes[node.id] ?: return@forEach
+                next.notes[node.id] = old.copy(meta = remote)
+                val pending = next.pending[node.id]
+                if (pending?.kind == "create") {
+                    if (remote.hasTextContent && remote.type !in setOf("file", "image")) {
+                        next.pending[node.id] = pending.copy(kind = "copy-update", html = remapTreeReferences(pending.html, remap, api.serverUrl),
+                            baseTitle = remote.title, baseHash = digest(""))
+                    } else {
+                        // Binary bytes have already been streamed; no text PUT may overwrite them.
+                        next.pending.remove(node.id)
+                    }
+                }
+                next.trash[node.id]?.let { entry ->
+                    if (entry.draft?.kind == "create") next.trash[node.id] = entry.copy(draft =
+                        if (!remote.hasTextContent || remote.type in setOf("file", "image")) null else entry.draft.copy(
+                            kind = "copy-update", html = remapTreeReferences(entry.draft.html, remap, api.serverUrl),
+                            baseTitle = remote.title, baseHash = digest("")))
+                }
+                next.attachments[node.id] = remoteCatalogs[node.id].orEmpty()
+            }
+        }
+
+        // The normal note outbox now owns final text bodies and any edits made during the copy.
+    }
+
+    private suspend fun saveCopyResource(operationId: String, resource: CopyResource) = change { next ->
+        val operation = next.treePending[operationId] ?: return@change
+        next.treePending[operationId] = operation.copy(copyResources = operation.copyResources.map {
+            if (it.localId == resource.localId) resource else it })
+    }
+
+    private fun copyAtomic(source: File, destination: File) {
+        destination.parentFile?.mkdirs()
+        val atomic = AtomicFile(destination)
+        val output = atomic.startWrite()
+        try {
+            source.inputStream().use { it.copyTo(output) }
+            atomic.finishWrite(output)
+        } catch (error: Throwable) { atomic.failWrite(output); throw error }
+    }
+
+    private fun writeAtomicText(destination: File, value: String) {
+        val atomic = AtomicFile(destination)
+        val output = atomic.startWrite()
+        try { output.write(value.toByteArray()); atomic.finishWrite(output) }
+        catch (error: Throwable) { atomic.failWrite(output); throw error }
+    }
+
+    private suspend fun syncTreeOperation(operation: TreeOperation) {
+        when (operation.kind) {
+            "move", "clone" -> {
+                checkRemoteCycle(operation.noteId, operation.targetParentId)
+                api.getNote(operation.noteId)
+                val target = api.placeBranch(TreeBranch("${operation.targetParentId}_${operation.noteId}",
+                    operation.noteId, operation.targetParentId, operation.prefix, operation.position, operation.expanded))
+                // Never remove the source until the new placement is confirmed to exist.
+                if (operation.kind == "move") {
+                    val sourceParent = try { api.getChildrenResult(operation.fromParentId) } catch (error: ApiException) {
+                        if (error.status != 404) throw error
+                        null // The confirmed target already protects a note whose old parent disappeared.
+                    }
+                    if (sourceParent?.failedBranchIds?.isNotEmpty() == true) throw IOException("Incomplete branch list")
+                    sourceParent?.items.orEmpty().filter { it.note.id == operation.noteId }.forEach { api.removeBranch(it.branchId) }
+                }
+                val remote = api.getNote(operation.noteId)
+                change { next ->
+                    next.notes[remote.id]?.let { next.notes[remote.id] = it.copy(meta = it.meta.copy(parentNoteIds = remote.parentNoteIds)) }
+                    replaceBranchId(next, "${operation.targetParentId}_${operation.noteId}", target.id)
+                    if (operation.kind == "move") next.pending[operation.noteId]?.let { draft ->
+                        if (draft.kind in setOf("create", "update", "copy-update") && draft.parentId == operation.fromParentId)
+                            next.pending[operation.noteId] = draft.copy(parentId = operation.targetParentId)
+                    }
+                }
+            }
+            "order" -> {
+                val current = api.getChildrenResult(operation.targetParentId)
+                if (current.failedBranchIds.isNotEmpty()) throw IOException("Incomplete branch list")
+                val local = store.children[operation.targetParentId].orEmpty().associateBy { it.branchId }
+                operation.order.forEachIndexed { index, id ->
+                    val noteId = operation.orderNotes.getOrNull(index) ?: local[id]?.note?.id
+                    val branch = current.items.firstOrNull { it.branchId == id || (noteId != null && it.note.id == noteId) }
+                        ?: throw TreeOperationException(R.string.tree_changed)
+                    api.positionBranch(branch.branchId, (index + 1) * 10)
+                }
+                api.refreshOrdering(operation.targetParentId)
+            }
+            "copy" -> syncCopy(operation)
+        }
+        change { next -> next.treePending.remove(operation.id) }
+        if (operation.kind == "copy") File(context.filesDir, "tree-copies/${operation.id}").deleteRecursively()
+    }
+
+    private fun replaceBranchId(next: Store, oldId: String, newId: String) {
+        if (oldId == newId) return
+        next.children.replaceAll { _, items -> items.map { if (it.branchId == oldId) it.copy(branchId = newId) else it } }
+        next.treePending.replaceAll { _, op -> op.copy(branchId = if (op.branchId == oldId) newId else op.branchId,
+            order = op.order.map { if (it == oldId) newId else it }) }
+    }
+
     suspend fun syncPending(): SyncState = syncMutex.withLock {
         if (cacheError != null) return@withLock store.toSyncState(error = cacheError)
         mutableSyncState.value = store.toSyncState(isSyncing = true)
-        val snapshots = store.pending.values.toList().sortedBy { it.revision }
         var lastError: String? = null
-        try {
+        val controlSnapshots = store.pending.values.filter { it.kind in setOf("delete", "restore") }.sortedBy { it.revision }
+        suspend fun syncDocuments(onlyIds: Set<String>? = null) {
+            val copyIds = store.treePending.values.filter { it.kind == "copy" }.flatMap { it.copyNodes }.mapTo(mutableSetOf()) { it.id }
+            val snapshots = store.pending.values.toList().sortedBy { it.revision }
             for (pending in snapshots) {
                 val current = store.pending[pending.noteId]
-                if (current == null || current.kind != pending.kind || current.revision != pending.revision || pending.conflict) continue
-                if (pending.kind != "delete" && isDeleted(pending.noteId)) continue
+                if (current == null || current.kind != pending.kind || current.revision != pending.revision || pending.conflict ||
+                    pending.kind in setOf("delete", "restore") || pending.noteId in copyIds || isDeleted(pending.noteId) ||
+                    (onlyIds != null && pending.noteId !in onlyIds)) continue
                 try {
-                    when (pending.kind) {
-                        "delete" -> syncDelete(pending)
-                        "create" -> syncCreate(pending)
-                        else -> syncUpdate(pending)
-                    }
+                    if (pending.kind == "create") syncCreate(pending) else syncUpdate(pending)
                 } catch (error: Exception) {
                     if (error is CancellationException) throw error
-                    lastError = if (pending.kind == "delete")
-                        text(R.string.msg_delete_failed, safeMessage(error)) else safeMessage(error)
+                    lastError = safeMessage(error)
+                }
+            }
+        }
+        try {
+            syncDocuments()
+            val copiedIds = store.treePending.values.filter { it.kind == "copy" }.flatMap { it.copyNodes }.mapTo(mutableSetOf()) { it.id }
+            for (operation in store.treePending.values.toList().sortedBy { it.revision }) {
+                try { syncTreeOperation(store.treePending[operation.id] ?: continue) }
+                catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    lastError = safeMessage(error)
+                    // Dependent branch operations must retain their staging order on retry.
+                    break
+                }
+            }
+            // Copy operations have prepared their attachment IDs and binary bytes.
+            if (store.treePending.isEmpty() && copiedIds.isNotEmpty()) syncDocuments(copiedIds)
+            for (pending in controlSnapshots) {
+                val current = store.pending[pending.noteId]
+                if (current?.kind != pending.kind || current.revision != pending.revision) continue
+                // Moving/copying a note must complete before deleting its original source.
+                if (store.treePending.isNotEmpty()) continue
+                try {
+                    if (pending.kind == "restore") syncRestore(pending) else syncDelete(pending)
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    lastError = if (pending.kind == "delete") text(R.string.msg_delete_failed, safeMessage(error)) else safeMessage(error)
                 }
             }
         } finally {
@@ -439,6 +1095,14 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
     }
 
     private suspend fun syncDelete(pending: Pending) {
+        var stillCurrent = false
+        change { next ->
+            if (next.pending[pending.noteId]?.revision == pending.revision && next.pending[pending.noteId]?.kind == "delete") {
+                stillCurrent = true
+                next.trash[pending.noteId]?.let { next.trash[pending.noteId] = it.copy(deleteAttempted = true) }
+            }
+        }
+        if (!stillCurrent) return
         try {
             api.deleteNote(pending.noteId)
         } catch (error: ApiException) {
@@ -456,7 +1120,9 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
             markRemoteMissing(pending.noteId)
             return
         }
-        if (!remote.isEditable || remote.type != pending.noteType || remote.mime != pending.noteMime) {
+        val supportsContent = remote.isEditable || (pending.kind == "copy-update" && remote.hasTextContent &&
+            !remote.isProtected && remote.type !in setOf("file", "image"))
+        if (!supportsContent || remote.type != pending.noteType || remote.mime != pending.noteMime) {
             markConflict(pending.noteId, remote, "")
             return
         }
@@ -473,7 +1139,7 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
             markConflict(pending.noteId, remote, remoteHtml)
             return
         }
-        if (store.pending[pending.noteId]?.kind != "update" || isDeleted(pending.noteId)) return
+        if (store.pending[pending.noteId]?.kind !in setOf("update", "copy-update") || isDeleted(pending.noteId)) return
         if (remoteHtml != pending.html) api.putContent(pending.noteId, pending.html)
         if (isDeleted(pending.noteId)) return
         if (remote.title != serverTitle(pending.title)) api.patchTitle(pending.noteId, serverTitle(pending.title))
@@ -481,7 +1147,7 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
     }
 
     private suspend fun markRemoteMissing(noteId: String) = change { next ->
-        next.pending[noteId]?.takeIf { it.kind == "update" || it.kind == "create" }?.let {
+        next.pending[noteId]?.takeIf { it.kind in setOf("update", "copy-update", "create") }?.let {
             next.pending[noteId] = it.copy(conflict = true, remoteMissing = true)
         }
     }
@@ -549,7 +1215,7 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
                 next.pending.remove(snapshot.noteId)
             } else if (current != null && current.kind == snapshot.kind) {
                 next.pending[snapshot.noteId] = current.copy(
-                    kind = "update", baseTitle = serverTitle(snapshot.title), baseHash = digest(html),
+                    kind = current.kind, baseTitle = serverTitle(snapshot.title), baseHash = digest(html),
                     conflict = false,
                 )
             }
@@ -564,8 +1230,24 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
                 children = store.children.toMutableMap(),
                 pending = store.pending.toMutableMap(),
                 deleted = store.deleted.toMutableSet(),
+                treePending = store.treePending.toMutableMap(), trash = store.trash.toMutableMap(),
+                attachments = store.attachments.toMutableMap(), completeChildren = store.completeChildren.toMutableSet(),
+                captures = store.captures.toMutableSet(), remoteTrash = store.remoteTrash.toMutableMap(),
             )
             block(next)
+            next.treePending.values.sortedBy { it.revision }.forEach { operation ->
+                if (operation.kind == "copy") operation.copyNodes.forEach { node ->
+                    next.notes[node.id]?.let { stored ->
+                        val parents = (operation.copyEdges.filter { it.noteId == node.id }.map { it.parentId } + node.parentId).distinct()
+                        next.notes[node.id] = stored.copy(meta = stored.meta.copy(parentNoteIds = parents))
+                    }
+                }
+                if (operation.kind in setOf("move", "clone")) next.notes[operation.noteId]?.let { stored ->
+                    val parents = (if (operation.kind == "move") stored.meta.parentNoteIds - operation.fromParentId
+                        else stored.meta.parentNoteIds) + operation.targetParentId
+                    next.notes[operation.noteId] = stored.copy(meta = stored.meta.copy(parentNoteIds = parents.distinct()))
+                }
+            }
             val excluded = deletionClosure(next)
             next.pending.replaceAll { id, draft ->
                 if (id in excluded || draft.parentId !in excluded) draft else {
@@ -622,7 +1304,8 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
         }
         val known = existing.mapTo(mutableSetOf()) { it.note.id }
         val local = snapshot.pending.values.filter {
-            it.kind == "create" && it.parentId == parentId && it.noteId !in known
+            it.kind == "create" && it.parentId == parentId && it.noteId !in known &&
+                snapshot.treePending.values.none { operation -> operation.kind == "move" && operation.noteId == it.noteId && operation.fromParentId == parentId }
         }.sortedBy { it.revision }.mapIndexed { index, pending ->
             val meta = requireNotNull(snapshot.notes[pending.noteId]).meta.copy(title = pending.title)
             TreeItem(requireNotNull(pending.branchId), meta, "", Int.MAX_VALUE - 1000 + index, false)
@@ -656,7 +1339,19 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
         for (id in pendingJson.keys()) pending[id] = Pending.fromJson(pendingJson.getJSONObject(id))
         val deletedJson = json.optJSONArray("deleted") ?: JSONArray()
         val deleted = (0 until deletedJson.length()).mapTo(mutableSetOf()) { deletedJson.getString(it) }
-        return Store(notes, children, pending, json.optLong("counter"), deleted)
+        val treePending = json.optJSONArray("treePending").objects().map(TreeOperation::parse).associateByTo(linkedMapOf()) { it.id }
+        val trash = mutableMapOf<String, TrashRecord>()
+        val trashJson = json.optJSONObject("trash") ?: JSONObject()
+        for (id in trashJson.keys()) trash[id] = TrashRecord.parse(trashJson.getJSONObject(id))
+        val attachments = mutableMapOf<String, List<AttachmentMeta>>()
+        val attachmentsJson = json.optJSONObject("attachmentCatalog") ?: JSONObject()
+        for (id in attachmentsJson.keys()) attachments[id] = attachmentsJson.getJSONArray(id).objects().map(::parseStoredAttachment)
+        val remoteTrash = json.optJSONArray("remoteTrash").objects().map { item ->
+            TrashItem(item.getString("noteId"), item.getString("title"),
+                item.optString("deletedAt").takeIf { it.isNotBlank() && it != "null" }, item.optBoolean("canRestore"))
+        }.associateByTo(mutableMapOf()) { it.noteId }
+        return Store(notes, children, pending, json.optLong("counter"), deleted, treePending, trash, attachments,
+            json.optJSONArray("completeChildren").strings().toMutableSet(), json.optJSONArray("captures").strings().toMutableSet(), remoteTrash)
     }
 
     private fun writeStore(next: Store) {
@@ -678,8 +1373,17 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
         }
         val pending = JSONObject()
         next.pending.forEach { (id, item) -> pending.put(id, item.toJson()) }
+        val trash = JSONObject()
+        next.trash.forEach { (id, entry) -> trash.put(id, entry.toJson()) }
+        val attachments = JSONObject()
+        next.attachments.forEach { (id, entries) -> attachments.put(id, JSONArray(entries.map { it.toStoredJson() })) }
         val bytes = json.put("notes", notes).put("children", children)
-            .put("pending", pending).toString().toByteArray(Charsets.UTF_8)
+            .put("pending", pending).put("treePending", JSONArray(next.treePending.values.map { it.toJson() }))
+            .put("trash", trash).put("attachmentCatalog", attachments)
+            .put("completeChildren", JSONArray(next.completeChildren.toList())).put("captures", JSONArray(next.captures.toList()))
+            .put("remoteTrash", JSONArray(next.remoteTrash.values.map { item -> JSONObject().put("noteId", item.noteId)
+                .put("title", item.title).put("deletedAt", item.deletedAt).put("canRestore", item.canRestore) }))
+            .toString().toByteArray(Charsets.UTF_8)
         val stream = file.startWrite()
         try {
             stream.write(bytes)
@@ -694,6 +1398,7 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
         IOException(safeMessage(error), error)
 
     private fun safeMessage(error: Exception): String = when (error) {
+        is TreeOperationException -> text(error.resource)
         is HiddenNoteException -> text(R.string.msg_hidden_notes)
         is UnexpectedHtmlResponseException -> loadFailureMessage(context, error)
         is ApiException -> when (error.status) {
@@ -730,6 +1435,23 @@ private fun deletionClosure(
     return deleted
 }
 
+private data class TrashRecord(val title: String, val deletedAt: String?, val draft: Pending?,
+    val localOnly: Boolean, val deleteAttempted: Boolean = false) {
+    fun toJson() = JSONObject().put("title", title).put("deletedAt", deletedAt).put("draft", draft?.toJson())
+        .put("localOnly", localOnly).put("deleteAttempted", deleteAttempted)
+    companion object {
+        fun parse(json: JSONObject) = TrashRecord(json.getString("title"),
+            json.optString("deletedAt").takeIf { it.isNotBlank() && it != "null" },
+            json.optJSONObject("draft")?.let(Pending::fromJson), json.optBoolean("localOnly"), json.optBoolean("deleteAttempted"))
+    }
+}
+
+private fun AttachmentMeta.toStoredJson(): JSONObject = JSONObject().put("attachmentId", id).put("ownerId", ownerId)
+    .put("role", role).put("mime", mime).put("title", title).put("position", position).put("blobId", blobId)
+private fun parseStoredAttachment(json: JSONObject) = AttachmentMeta(json.getString("attachmentId"), json.getString("ownerId"),
+    json.getString("role"), json.getString("mime"), json.getString("title"), json.getInt("position"),
+    json.optString("blobId").takeIf { it.isNotBlank() && it != "null" })
+
 private data class StoredNote(val meta: NoteMeta, val html: String?)
 
 private data class Store(
@@ -738,12 +1460,18 @@ private data class Store(
     val pending: MutableMap<String, Pending> = mutableMapOf(),
     var counter: Long = 0,
     val deleted: MutableSet<String> = mutableSetOf(),
+    val treePending: MutableMap<String, TreeOperation> = linkedMapOf(),
+    val trash: MutableMap<String, TrashRecord> = mutableMapOf(),
+    val attachments: MutableMap<String, List<AttachmentMeta>> = mutableMapOf(),
+    val completeChildren: MutableSet<String> = mutableSetOf(),
+    val captures: MutableSet<String> = mutableSetOf(),
+    val remoteTrash: MutableMap<String, TrashItem> = mutableMapOf(),
 ) {
     fun toSyncState(isSyncing: Boolean = false, error: String? = null): SyncState {
         val excluded = deletionClosure(this)
-        val active = pending.values.filter { it.kind == "delete" || it.noteId !in excluded }
+        val active = pending.values.filter { it.kind in setOf("delete", "restore") || it.noteId !in excluded }
         return SyncState(
-            pendingCount = active.size,
+            pendingCount = active.size + treePending.size,
             isSyncing = isSyncing,
             conflicts = active.filter { it.conflict }.mapTo(mutableSetOf()) { it.noteId },
             error = error,
@@ -798,6 +1526,7 @@ private fun NoteMeta.toJson(): JSONObject = JSONObject()
     .put("childBranchIds", JSONArray(childBranchIds))
     .put("parentNoteIds", JSONArray(parentNoteIds))
     .put("docName", docName ?: JSONObject.NULL)
+    .put("attributes", JSONArray(attributes.map { it.toJson() }))
 
 private val weakParents = setOf("_share", "_lbBookmarks")
 

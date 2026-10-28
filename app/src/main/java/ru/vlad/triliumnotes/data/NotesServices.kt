@@ -23,6 +23,8 @@ class NotesServices internal constructor(
     val repository = NotesRepository(context, api)
     val resources = NoteResources(context, api, serverUrl)
     val offline = OfflineSync(repository, api, resources, context)
+    val libraryPreferences = LibraryPreferences(context)
+    val attachments = AttachmentManager(context, api, repository)
     @Volatile var attachmentInsertionHandler: (suspend (PendingAttachmentUpload, AttachmentMeta) -> Unit)? = null
     val uploads = AttachmentUploadQueue(context, api, repository, resources) { upload, attachment ->
         val handler = attachmentInsertionHandler
@@ -87,7 +89,7 @@ class NotesServices internal constructor(
             val cache = File(account, "trilium-cache.json")
             if (cache.isFile || File(cache.path + ".bak").isFile) {
                 val pending = runCatching {
-                    JSONObject(AtomicFile(cache).readFully().toString(Charsets.UTF_8)).optJSONObject("pending")?.length() ?: 0
+                    JSONObject(AtomicFile(cache).readFully().toString(Charsets.UTF_8)).let { (it.optJSONObject("pending")?.length() ?: 0) + (it.optJSONArray("treePending")?.length() ?: 0) }
                 }.getOrElse {
                     throw LegacyImportException(R.string.msg_legacy_current_corrupt)
                 }
@@ -127,7 +129,7 @@ class NotesServices internal constructor(
 
         fun legacyPendingCount(context: Context): Int? = runCatching {
             val json = JSONObject(AtomicFile(File(context.filesDir, "trilium-cache.json")).readFully().toString(Charsets.UTF_8))
-            json.optJSONObject("pending")?.length() ?: 0
+            (json.optJSONObject("pending")?.length() ?: 0) + (json.optJSONArray("treePending")?.length() ?: 0)
         }.getOrNull()
 
         /** Old builds had no server identity: retain their files without attaching them to a new login. */

@@ -5,6 +5,9 @@ Original trilium-client code is GPL-3.0-or-later. Third-party notices are preser
 | Component | Upstream license | Source and notices |
 | --- | --- | --- |
 | CKEditor 5, 49.0.0 | GPL-2.0-or-later (the GPL option is used; GPLv3 is compatible with the project license) | [Source tag](https://github.com/ckeditor/ckeditor5/tree/v49.0.0), [bundled license](app/src/main/assets/editor/vendor/LICENSE.md), [copyright and provenance](app/src/main/assets/editor/vendor/NOTICE.txt) |
+| Mermaid 11.17.2 | MIT | [Preferred source](https://github.com/mermaid-js/mermaid/tree/02d554400de909df3fa1c62b87dca5ef7df4ac97), [retained dependency notices](app/src/main/assets/diagrams/vendor/THIRD_PARTY_NOTICES.txt) |
+| Excalidraw 0.18.1, React/React DOM 18.3.1 | MIT | [Preferred Excalidraw source](https://github.com/excalidraw/excalidraw/tree/a2ec2889babf7d2295469c6d90ebe77fae57df84), [upstream licenses](app/src/main/assets/diagrams/vendor/UPSTREAM_LICENSES.txt) |
+| Excalidraw local fonts | SIL Open Font License 1.1 and MIT, as identified per font | [Retained font copyright and license notices](app/src/main/assets/diagrams/vendor/UPSTREAM_LICENSES.txt) |
 | AndroidX, Jetpack Compose and Material Components | Apache-2.0 | [AndroidX](https://android.googlesource.com/platform/frameworks/support/), [license](https://android.googlesource.com/platform/frameworks/support/+/androidx-main/LICENSE.txt) |
 | Kotlin and kotlinx.coroutines | Apache-2.0 | [Kotlin](https://github.com/JetBrains/kotlin), [coroutines](https://github.com/Kotlin/kotlinx.coroutines) |
 | OkHttp and Okio | Apache-2.0 | [OkHttp](https://github.com/square/okhttp), [Okio](https://github.com/square/okio) |
@@ -19,6 +22,10 @@ The CKEditor distribution also includes third-party components under MIT and ISC
 `ckeditor5.umd.js`, `ckeditor5.css`, and `ru.umd.js` are unmodified files from the official [49.0.0 distribution ZIP](https://cdn.ckeditor.com/ckeditor5/49.0.0/zip/ckeditor5-49.0.0.zip). The ZIP's SHA-256 is `cff5d58b096ffb726bba9be494e857c58c4f3606ebade4c998f8fa8d624a4948`. The preferred upstream source is the `v49.0.0` tag, resolved to commit `7e7dd1eda991d700c65061c00ee12ca2c1de5bdd`. [sources.lock.json](sources.lock.json) pins that source archive, the distribution, its three bundled files, and the production npm dependency closure from its upstream lockfile.
 
 The surrounding Android integration, `editor.js`, and `editor.css` are this project's modifications. A CSS rule added on 2026-10-23 hides the floating promotional badge; the upstream JavaScript, copyright, and license files are retained. This documents the modification rather than claiming a CKSource commercial license or endorsement.
+
+## Offline diagram renderer provenance
+
+The read-only Mermaid and Excalidraw viewers use official renderers bundled locally, including Excalidraw's font files. [scripts/diagrams/package-lock.json](scripts/diagrams/package-lock.json) pins the npm dependency and build-tool closure. [scripts/diagrams/sources.lock.json](scripts/diagrams/sources.lock.json) records their original archives, npm integrity hashes, preferred upstream source archives, and every generated asset hash. The build recipe and source maps with source content are retained in `scripts/diagrams/`; notices are retained in `assets/diagrams/vendor/`. The release source archive includes those files, the original locked npm packages and exact upstream Mermaid/Excalidraw source trees. The integration supplies an offline viewer with panning and zoom, without changing the upstream renderers or font files.
 
 ## Binary distribution
 

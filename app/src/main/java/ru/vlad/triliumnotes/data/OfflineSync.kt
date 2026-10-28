@@ -65,7 +65,9 @@ class OfflineSync(
                             mutable.value = mutable.value.copy(resources = state.value.resources + 1)
                         }
                         // Attachments can exist even when they are not linked from the body.
-                        api.getAttachments(id).forEach { attachment ->
+                        val catalog = api.getAttachments(id)
+                        repository.rememberAttachments(id, catalog)
+                        catalog.forEach { attachment ->
                             resources.prefetchAttachment(attachment, note)
                             validatedAttachmentIds += attachment.id
                             mutable.value = mutable.value.copy(resources = state.value.resources + 1)

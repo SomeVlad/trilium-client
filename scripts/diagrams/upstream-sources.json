@@ -1,0 +1,26 @@
+[
+  {
+    "name": "mermaid",
+    "version": "11.17.2",
+    "commit": "02d554400de909df3fa1c62b87dca5ef7df4ac97",
+    "url": "https://codeload.github.com/mermaid-js/mermaid/tar.gz/02d554400de909df3fa1c62b87dca5ef7df4ac97",
+    "filename": "mermaid-02d554400de909df3fa1c62b87dca5ef7df4ac97.tar.gz",
+    "sha256": "e2a6616b8648cf2bdf17b02e96d967db21006af4e6d33a759ae4d94b63f88c4d"
+  },
+  {
+    "name": "@excalidraw/excalidraw",
+    "version": "0.18.1",
+    "commit": "a2ec2889babf7d2295469c6d90ebe77fae57df84",
+    "url": "https://codeload.github.com/excalidraw/excalidraw/tar.gz/a2ec2889babf7d2295469c6d90ebe77fae57df84",
+    "filename": "excalidraw-a2ec2889babf7d2295469c6d90ebe77fae57df84.tar.gz",
+    "sha256": "621dfe535d6b65ee42fb4e4d9dc058cbf2e140319d942b03aaf7b115b2bdb642"
+  },
+  {
+    "name": "@excalidraw/mermaid-to-excalidraw",
+    "version": "2.2.2",
+    "commit": "167be14d2f6f5915af4d157bfc66e341ceb58c35",
+    "url": "https://codeload.github.com/excalidraw/mermaid-to-excalidraw/tar.gz/167be14d2f6f5915af4d157bfc66e341ceb58c35",
+    "filename": "mermaid-to-excalidraw-167be14d2f6f5915af4d157bfc66e341ceb58c35.tar.gz",
+    "sha256": "287a4a4383565adef40e1291c210e31bbf2e26d2bcb5215f42b85aa7e894e2d0"
+  }
+]

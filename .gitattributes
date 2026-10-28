@@ -1,3 +1,8 @@
 * text=auto eol=lf
 *.bat text eol=crlf
 *.jar binary
+# Сторонние файлы и source maps сохраняются побайтно для проверки исходников.
+app/src/main/assets/diagrams/vendor/** -text -whitespace
+scripts/diagrams/maps/** -text -whitespace
+scripts/diagrams/preferred-sources/** -text -whitespace
+scripts/diagrams/UPSTREAM_LICENSES.txt -text -whitespace

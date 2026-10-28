@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tree_load_first">"Open the destination folder and its parent path first."</string>
+    <string name="tree_already_there">"This note is already in that folder."</string>
+    <string name="tree_cycle">"A note cannot be placed inside itself or one of its descendants."</string>
+    <string name="tree_changed">"The tree has changed. Refresh the folder and try again."</string>
+    <string name="tree_copy_download_first">"First download the note, all its descendants and attachments for offline access."</string>
+    <string name="tree_copy_protected">"Protected and system notes cannot be copied through ETAPI."</string>
+    <string name="tree_copy_conflict">"Resolve the edit conflict in the source note before copying."</string>
+    <string name="tree_copy_upload_first">"Wait for newly added attachments to finish uploading first."</string>
+</resources>

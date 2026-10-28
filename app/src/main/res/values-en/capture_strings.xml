@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="capture_title">Save to Trilium</string>
+    <string name="capture_account">Server: %1$s</string>
+    <string name="capture_files">Attachments: %1$d</string>
+    <string name="capture_new_note">New note</string>
+    <string name="capture_existing_note">Add to existing note</string>
+    <string name="capture_note_title">Note title</string>
+    <string name="capture_root">Root folder</string>
+    <string name="capture_select_note">Choose a note</string>
+    <string name="capture_destination_note">Note</string>
+    <string name="capture_destination_folder">Folder for new note</string>
+    <string name="capture_save">Save</string>
+    <string name="capture_later">Later</string>
+    <string name="capture_discard">Delete</string>
+    <string name="capture_receiving">Saving shared content…</string>
+    <string name="capture_receive_error">Could not receive shared content. Check file access and free space, then retry.</string>
+    <string name="capture_retry">Retry</string>
+    <string name="capture_close">Close</string>
+    <string name="quick_note_widget_name">Quick note</string>
+    <string name="quick_note_widget_description">Create a Trilium note with one tap</string>
+    <string name="capture_account_changed">This content is already assigned to another server. Connect to that server to continue.</string>
+    <string name="capture_destination_locked">Destination saved. Retry will continue saving to the chosen note.</string>
+</resources>

@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import ru.vlad.triliumnotes.AppLanguage
 import ru.vlad.triliumnotes.R
 import ru.vlad.triliumnotes.data.NoteMeta
+import ru.vlad.triliumnotes.data.NoteDocument
 import ru.vlad.triliumnotes.data.NoteRevision
 import ru.vlad.triliumnotes.data.RevisionDocument
 import ru.vlad.triliumnotes.editor.EditorResource
@@ -80,10 +81,12 @@ fun NoteHistorySheet(
     onDismiss: () -> Unit,
     resourceLoader: (String) -> EditorResource? = { null },
     serverUrl: String = "",
+    currentDocument: NoteDocument? = null,
 ) {
     val context = LocalContext.current
     fun label(id: Int): String = AppLanguage.get(context, id)
     var confirmRestore by remember(note.id, state.selected?.id) { mutableStateOf(false) }
+    var comparing by remember(note.id, state.selected?.id) { mutableStateOf(false) }
     val preview = state.preview?.takeIf { it.revision.id == state.selected?.id && it.revision.noteId == note.id }
     val canRestore = preview != null && preview.revision.canRestoreTo(note) && state.allowRestore && !state.working
     BackHandler(state.selected != null && !state.working) { onBack() }
@@ -167,8 +170,16 @@ fun NoteHistorySheet(
                         modifier = Modifier.testTag("history-restore")) { Text(label(R.string.history_restore)) }
                 }
                 HorizontalDivider()
+                if (preview != null && currentDocument != null) {
+                    TextButton(onClick = { comparing = !comparing },
+                        modifier = Modifier.padding(horizontal = 12.dp).testTag("history-compare")) {
+                        Text(label(if (comparing) R.string.diff_preview else R.string.diff_compare))
+                    }
+                }
                 when {
                     state.previewLoading -> HistoryLoading(Modifier.weight(1f))
+                    comparing && preview != null && currentDocument != null ->
+                        NoteDiffView(preview, currentDocument, Modifier.fillMaxWidth().weight(1f))
                     preview != null -> RevisionPreview(preview, Modifier.fillMaxWidth().weight(1f), resourceLoader, serverUrl)
                     state.error == null -> Text(label(R.string.history_preview_unavailable), Modifier.padding(22.dp))
                 }

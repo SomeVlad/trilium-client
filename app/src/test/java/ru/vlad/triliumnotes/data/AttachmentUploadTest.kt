@@ -240,4 +240,70 @@ class AttachmentUploadTest {
         assertTrue(markdown.contains("(<api/attachments/noteAAAA/attachAAAA/"))
         assertEquals("hidden.pdf", uploadTitle("../hidden.pdf\n"))
     }
+
+    @Test fun sharedFileStableIdentitySurvivesReplayBeforeAndAfterCompletedUpload() = runBlocking {
+        val source = File(directory, "part-0").apply { writeText("shared source") }
+        val id = "01234567-89ab-cdef-0123-456789abcdef"
+        val first = queue()
+        first.stageFile(source, "noteAAAA", "Original name.txt", "text/plain", false, id)
+        val restarted = queue()
+        restarted.stageFile(source, "noteAAAA", "Original name.txt", "text/plain", false, id)
+        assertEquals(1, restarted.state.value.pendingCount)
+        restarted.syncPending()
+        assertEquals(1, createCount)
+        assertEquals(1, putCount)
+        source.delete()
+        val completedReplay = queue()
+        completedReplay.stageFile(source, "noteAAAA", "Original name.txt", "text/plain", false, id)
+        completedReplay.syncPending()
+        assertEquals(0, completedReplay.state.value.pendingCount)
+        assertEquals(1, createCount)
+        assertEquals(1, putCount)
+    }
+
+    @Test fun cursorReservationIsRetainedInDurableUploadMetadata() = runBlocking {
+        val source = File(directory, "document.pdf").apply { writeText("bytes") }
+        val anchor = "01234567-89ab-cdef-0123-456789abcdef"
+        queue().stage(Uri.fromFile(source), "noteAAAA", false, anchor)
+        val restarted = queue { upload, _ -> assertEquals(anchor, upload.insertionAnchor) }
+        assertEquals(setOf(anchor), restarted.pendingAnchors())
+        restarted.syncPending()
+        assertEquals(emptySet<String>(), restarted.pendingAnchors())
+    }
+
+
+    @Test fun nativeTrashSuspendsUploadAcrossRestartAndRestoreResumesWithoutRepicking() = runBlocking {
+        var inserted = 0
+        val first = queue { _, _ -> inserted++ }
+        val upload = stage(first)
+        repository.trash("noteAAAA")
+        assertTrue(repository.isRecoverablyDeleted("noteAAAA"))
+        assertEquals(0, first.refreshPendingCount())
+        first.syncPending()
+        assertEquals(0, createCount)
+        assertTrue(File(directory, "attachment-uploads/${upload.uploadId}/content").isFile)
+        assertFalse(File(directory, "attachment-uploads-retained/${upload.uploadId}").exists())
+        val restarted = queue { _, _ -> inserted++ }
+        assertEquals(0, restarted.state.value.pendingCount)
+        assertTrue(restarted.hasPending("noteAAAA"))
+        repository.restore("noteAAAA")
+        assertEquals(1, restarted.refreshPendingCount())
+        restarted.syncPending()
+        assertEquals(1, createCount)
+        assertEquals(1, inserted)
+        assertEquals(0, restarted.state.value.pendingCount)
+    }
+
+    @Test fun uploadedCatalogIsDurableBeforeReferenceInsertion() = runBlocking {
+        val queue = queue { _, attachment ->
+            val cached = JSONObject(File(directory, "trilium-cache.json").readText())
+                .getJSONObject("attachmentCatalog").getJSONArray("noteAAAA").getJSONObject(0)
+            assertEquals(attachment.id, cached.getString("attachmentId"))
+            assertEquals("confirmedBlob", cached.getString("blobId"))
+        }
+        stage(queue)
+        queue.syncPending()
+        assertEquals(0, queue.state.value.pendingCount)
+    }
+
 }

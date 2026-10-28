@@ -132,7 +132,7 @@ class DeleteAcceptanceTest {
                 waitTag("note-row-qa_exclusive")
                 compose.onNodeWithTag("folder-content").assertDoesNotExist()
                 openDelete("qa_folder")
-                compose.onNodeWithText("Вложенные заметки тоже будут удалены", substring = true).assertIsDisplayed()
+                compose.onNodeWithText("Удаление затронет её клоны и вложенные заметки без других родителей.", substring = true).assertIsDisplayed()
                 capture("02-folder-confirmation")
                 compose.onNodeWithTag("confirm-delete-note").performClick()
                 compose.waitUntil(10_000) { services.repository.isDeleted("qa_folder") }
@@ -180,7 +180,7 @@ class DeleteAcceptanceTest {
         assertTrue("This phase must be a different real application process", prior.getInt("pid") != android.os.Process.myPid())
         assertTrue("Durable fixture disappeared across force-stop", cache.isFile)
         LoopbackFixture().use { server ->
-            server.loseDeleteResponseOnce = "qa_delete"
+            server.holdDeleteResponseFor = "qa_delete"
             val services = inject(server, directory)
             deleteTargets.forEach { assertTrue(services.repository.isDeleted(it)) }
             assertTrue(services.repository.isDeleted("qa_exclusive"))
@@ -191,13 +191,16 @@ class DeleteAcceptanceTest {
                 compose.waitUntil(10_000) { !services.repository.syncState.value.isSyncing }
                 // The default Android network remains off; only the fixture transport reconnects.
                 server.enabled = true
-                activity.onActivity { ViewModelProvider(it)[NotesViewModel::class.java].connectionAvailable() }
+                activity.onActivity {
+                    ViewModelProvider(it)[ConnectionViewModel::class.java].notesModel(services).connectionAvailable()
+                }
                 compose.waitUntil(15_000) {
                     server.mutations().count { it.status == 204 } >= 2 &&
                         services.repository.syncState.value.pendingCount == 1 && !services.repository.syncState.value.isSyncing
                 }
                 assertEquals(setOf("qa_delete"), JSONObject(cache.readText()).getJSONObject("pending").keys().asSequence().toSet())
                 // User retries an ambiguous delete; server 404 is successful idempotent completion.
+                server.holdDeleteResponseFor = null
                 compose.onNodeWithTag("sync-status").performClick()
                 compose.onNodeWithText("Обновить").performClick()
                 compose.waitUntil(15_000) { services.repository.syncState.value.pendingCount == 0 }
@@ -377,7 +380,7 @@ class DeleteAcceptanceTest {
         val remoteDeleted = Collections.synchronizedSet(mutableSetOf<String>())
         @Volatile var enabled = false
         @Volatile var serveStale = false
-        @Volatile var loseDeleteResponseOnce: String? = null
+        @Volatile var holdDeleteResponseFor: String? = null
         @Volatile private var closed = false
         private val socket: SSLServerSocket
         private val worker: Thread
@@ -471,6 +474,7 @@ class DeleteAcceptanceTest {
             val path = target.substringBefore('?')
             val id = path.substringAfter("/etapi/notes/").substringBefore('/')
             if (method == "DELETE" && path.startsWith("/etapi/notes/")) {
+                if (holdDeleteResponseFor == id && id in remoteDeleted) return 503 to "{}"
                 if (id in remoteDeleted || id !in notes) return 404 to "{}"
                 remoteDeleted += id
                 var changed: Boolean
@@ -481,7 +485,7 @@ class DeleteAcceptanceTest {
                         if (parents.length() > 0 && (0 until parents.length()).all { parents.getString(it) in remoteDeleted } && remoteDeleted.add(child)) changed = true
                     }
                 } while (changed)
-                if (loseDeleteResponseOnce == id) { loseDeleteResponseOnce = null; return 503 to "{}" }
+                if (holdDeleteResponseFor == id) return 503 to "{}"
                 return 204 to ""
             }
             if (method != "GET") return 405 to "{}"

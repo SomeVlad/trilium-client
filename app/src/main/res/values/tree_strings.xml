@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tree_load_first">"Сначала откройте папку назначения и путь к ней."</string>
+    <string name="tree_already_there">"Заметка уже находится в этой папке."</string>
+    <string name="tree_cycle">"Нельзя поместить заметку внутрь неё самой или её вложенной заметки."</string>
+    <string name="tree_changed">"Структура изменилась. Обновите папку и повторите действие."</string>
+    <string name="tree_copy_download_first">"Сначала скачайте заметку со всеми вложенными заметками и вложениями для офлайн-доступа."</string>
+    <string name="tree_copy_protected">"Защищённые и системные заметки нельзя копировать через ETAPI."</string>
+    <string name="tree_copy_conflict">"Сначала разрешите конфликт изменений в копируемой заметке."</string>
+    <string name="tree_copy_upload_first">"Сначала дождитесь отправки добавленных вложений."</string>
+</resources>

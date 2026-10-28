@@ -14,6 +14,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
+import org.json.JSONArray
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -59,6 +63,7 @@ fun SourceNoteEditor(
     val sourceDescription = AppLanguage.get(context, R.string.editor_source_text)
     key(noteKey) {
         var content by remember { mutableStateOf(initialContent) }
+        var field by remember { mutableStateOf(TextFieldValue(initialContent)) }
         var localTitle by remember { mutableStateOf(title) }
         val editable = isEditing && !readOnly
         if (mime.contains("markdown", ignoreCase = true)) {
@@ -71,6 +76,37 @@ fun SourceNoteEditor(
                     searchState = searchState)
             }
         } else {
+            var savedSelection by remember { mutableStateOf<TextRange?>(null) }
+            DisposableEffect(controller, editable) {
+                val command: (String, (Boolean) -> Unit) -> Unit = command@{ script, complete ->
+                    if (!editable) { complete(false); return@command }
+                    val name = script.substringBefore('(')
+                    val args = JSONArray("[" + script.substringAfter('(').removeSuffix(")") + "]")
+                    if (name == "saveSelection") { savedSelection = field.selection; complete(true); return@command }
+                    fun escape(value: String) = value.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;")
+                    val insertion = when (name) {
+                        "insertNoteLink" -> "<a href=\"#root/${args.getString(0)}\">${escape(args.getString(1))}</a>"
+                        "reserveAttachment" -> "<a href=\"#pocket-upload-${args.getString(0)}\">${escape(args.getString(1))}</a>"
+                        else -> null
+                    }
+                    if (name == "cancelAttachment") {
+                        val target = "#pocket-upload-${args.getString(0)}"
+                        val changed = Regex("<a\\b(?=[^>]*href=[\"']$target[\"'])[^>]*>[\\s\\S]*?</a>").replace(field.text, "")
+                        field = TextFieldValue(changed, TextRange(changed.length)); content = changed
+                    } else if (insertion != null) {
+                        val selected = savedSelection ?: field.selection
+                        val start = selected.min.coerceIn(0, field.text.length)
+                        val end = selected.max.coerceIn(start, field.text.length)
+                        val changed = field.text.replaceRange(start, end, insertion)
+                        field = TextFieldValue(changed, TextRange(start + insertion.length)); content = changed
+                    } else { complete(false); return@command }
+                    savedSelection = null
+                    onContentChanged(content)
+                    complete(true)
+                }
+                controller?.command = command
+                onDispose { controller?.let { if (it.command === command) it.command = null } }
+            }
             val style = MaterialTheme.typography.bodyLarge.copy(
                 color = MaterialTheme.colorScheme.onBackground, fontFamily = FontFamily.Monospace,
                 fontSize = 15.sp, lineHeight = 24.sp,
@@ -108,7 +144,7 @@ fun SourceNoteEditor(
                         .semantics { contentDescription = titleDescription },
                 )
                 if (editable) BasicTextField(
-                    value = content, onValueChange = { content = it; onContentChanged(it) },
+                    value = field, onValueChange = { field = it; content = it.text; onContentChanged(it.text) },
                     textStyle = style, cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     modifier = Modifier.fillMaxWidth().testTag("source-editor")
                         .semantics { contentDescription = sourceDescription },

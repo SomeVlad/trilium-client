@@ -274,7 +274,69 @@
         if (options.editing && !editor && !editorPromise && !fallbackActive) initializeEditor();
         resizeTitle();
     }
-    window.pocket = { configure, flush, snapshot, focusForEditing, get editor() { return editor; },
+    let savedSelection = null;
+    function saveSelection() {
+        if (!options.editing || !ready) return false;
+        const area = sourceArea() || (fallbackActive ? fallback : null);
+        savedSelection = area ? {start:area.selectionStart, end:area.selectionEnd} :
+            editor ? {range:editor.model.document.selection.getFirstRange()?.clone()} : null;
+        return savedSelection != null;
+    }
+    const escapeHtml = value => value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const escapeMarkdown = value => value.replace(/[\\`*_{}\[\]()#+.!<>|-]/g,'\\$&').replace(/[\r\n]/g,' ');
+    function insertLink(href, label) {
+        if (!options.editing || !ready) return false;
+        const area = sourceArea() || (fallbackActive ? fallback : null);
+        if (area) {
+            const start = savedSelection?.start ?? area.selectionStart, end = savedSelection?.end ?? area.selectionEnd;
+            const value = isMarkdown ? '[' + escapeMarkdown(label) + '](' + href + ')' :
+                '<a href="' + escapeHtml(href) + '">' + escapeHtml(label) + '</a>';
+            area.setRangeText(value, start, end, 'end');
+            dirty = true; savedSelection = null; flush(); return true;
+        }
+        if (!editor) return false;
+        editor.model.change(writer => {
+            if (savedSelection?.range) {
+                try { writer.setSelection(savedSelection.range); } catch (_) { /* current selection remains valid */ }
+            }
+            const attrs = Object.fromEntries(editor.model.document.selection.getAttributes());
+            attrs.linkHref = href;
+            editor.model.insertContent(writer.createText(label, attrs));
+            writer.removeSelectionAttribute('linkHref');
+        });
+        savedSelection = null; dirty = true; flush(); return true;
+    }
+    function insertNoteLink(noteId, label) {
+        if (noteId === 'root' || !/^[A-Za-z0-9_]{4,32}$/.test(noteId)) return false;
+        return insertLink('#root/' + noteId, label || noteId);
+    }
+    function reserveAttachment(anchor, label) {
+        if (!/^[a-f0-9-]{36}$/.test(anchor)) return false;
+        const current = snapshot();
+        if (current && JSON.parse(current).html.includes('#pocket-upload-' + anchor)) return true;
+        return insertLink('#pocket-upload-' + anchor, label || '…');
+    }
+    function cancelAttachment(anchor) {
+        if (!options.editing || !ready || !/^[a-f0-9-]{36}$/.test(anchor)) return false;
+        const href = '#pocket-upload-' + anchor;
+        const area = sourceArea() || (fallbackActive ? fallback : null);
+        if (area) {
+            const pattern = isMarkdown ? new RegExp('\\[(?:\\\\.|[^\\]\\n])*]\\(<?' + href + '>?\\)', 'g') :
+                new RegExp('<a\\b(?=[^>]*\\bhref=["\\\']' + href + '["\\\'])[^>]*>[\\s\\S]*?</a>', 'gi');
+            area.value = area.value.replace(pattern, '');
+        } else if (editor) {
+            const ranges = [];
+            for (const item of editor.model.createRangeIn(editor.model.document.getRoot()).getItems()) {
+                if (item.is('$textProxy') && item.getAttribute('linkHref') === href)
+                    ranges.push(editor.model.createRange(editor.model.createPositionAt(item.parent,item.startOffset),
+                        editor.model.createPositionAt(item.parent,item.endOffset)));
+            }
+            editor.model.change(writer => ranges.reverse().forEach(range => writer.remove(range)));
+        } else return false;
+        dirty = true; flush(); return true;
+    }
+    window.pocket = { configure, flush, snapshot, focusForEditing, saveSelection, insertNoteLink, reserveAttachment, cancelAttachment,
+        get editor() { return editor; },
         get ready() { return ready; }, get editorInitializing() { return !!editorPromise && !editor && !fallbackActive; } };
     function loadEditorLibrary() {
         if (editorLibraryPromise) return editorLibraryPromise;

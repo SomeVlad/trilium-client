@@ -35,6 +35,7 @@ val legalAssets = layout.buildDirectory.dir("generated/legalAssets")
 val generateLegalAssets = tasks.register("generateLegalAssets") {
     inputs.files(rootProject.files("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"))
     inputs.files(fileTree("src/main/assets/editor/vendor") { include("*LICENSE*", "NOTICE.txt", "COPYING.GPL") })
+    inputs.files(fileTree("src/main/assets/diagrams/vendor") { include("*LICENSE*", "*NOTICE*") })
     inputs.files(releaseRuntime)
     outputs.dir(legalAssets)
     doLast {
@@ -79,6 +80,8 @@ val generateLegalAssets = tasks.register("generateLegalAssets") {
         index += "editor/vendor/COPYING.GPL\tCKEditor — GNU GPL"
         if (file("src/main/assets/editor/vendor/THIRD_PARTY_LICENSES.txt").isFile)
             index += "editor/vendor/THIRD_PARTY_LICENSES.txt\tCKEditor — уведомления зависимостей"
+        index += "diagrams/vendor/THIRD_PARTY_NOTICES.txt\tOffline diagrams — dependency notices"
+        index += "diagrams/vendor/UPSTREAM_LICENSES.txt\tExcalidraw and local fonts — upstream licenses"
         directory.resolve("index.txt").writeText(index.joinToString("\n"))
     }
 }
@@ -121,8 +124,8 @@ android {
         applicationId = "ru.vlad.triliumnotes"
         minSdk = 28
         targetSdk = 36
-        versionCode = 19
-        versionName = "0.5.0"
+        versionCode = 20
+        versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
     }

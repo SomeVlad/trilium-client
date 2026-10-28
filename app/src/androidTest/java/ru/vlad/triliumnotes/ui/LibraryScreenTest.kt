@@ -55,8 +55,8 @@ class LibraryScreenTest {
         }
         compose.onNodeWithTag("note-actions-folder").performClick()
         compose.onNodeWithText("Удалить").performClick()
-        compose.onNodeWithText("Удалить «Книги»?").assertIsDisplayed()
-        compose.onNodeWithText("Заметка будет удалена из всех папок. Вложенные заметки тоже будут удалены, кроме тех, что находятся и в других папках. Удаление отправится на сервер при подключении.").assertIsDisplayed()
+        compose.onNodeWithText("Переместить в корзину?").assertIsDisplayed()
+        compose.onNodeWithText("Книги\n\nЗаметку можно восстановить из корзины. Удаление затронет её клоны и вложенные заметки без других родителей.").assertIsDisplayed()
         compose.onNodeWithText("Отмена").performClick()
         compose.onNodeWithTag("delete-note-dialog").assertDoesNotExist()
         compose.runOnIdle { assertTrue(deleted.isEmpty()) }
@@ -87,7 +87,8 @@ class LibraryScreenTest {
         compose.runOnIdle { state = state.copy(deletingNoteId = null) }
         compose.onNodeWithTag("note-actions-file").performClick()
         compose.onNodeWithText("Удалить").performClick()
-        compose.onNodeWithText("Удалить «Документ.pdf»?").assertIsDisplayed()
+        compose.onNodeWithText("Переместить в корзину?").assertIsDisplayed()
+        compose.onNodeWithText("Документ.pdf\n\nЗаметку можно восстановить из корзины. Удаление затронет её клоны и вложенные заметки без других родителей.").assertIsDisplayed()
         compose.onNodeWithTag("confirm-delete-note").performClick()
         compose.runOnIdle { assertEquals(0, opens); assertEquals(listOf(file), deleted) }
     }

@@ -37,18 +37,53 @@ data class EditorResource(val mimeType: String, val bytes: ByteArray)
 
 class RichNoteEditorController {
     internal var action: ((() -> Unit) -> Unit)? = null
+    internal var command: ((String, (Boolean) -> Unit) -> Unit)? = null
+    fun saveSelection(onComplete: (Boolean) -> Unit = {}) = run("saveSelection()", onComplete)
+    fun insertNoteLink(noteId: String, title: String, onComplete: (Boolean) -> Unit = {}) {
+        require(noteId != "root" && noteId.matches(Regex("[A-Za-z0-9_]{4,32}")))
+        run("insertNoteLink(${JSONObject.quote(noteId)},${JSONObject.quote(title)})", onComplete)
+    }
+    /** Flush the placeholder to the repository before launching the picker. Keep its UUID in saved state. */
+    fun reserveAttachment(anchor: String, label: String, onComplete: (Boolean) -> Unit = {}) {
+        require(ru.vlad.triliumnotes.data.isAttachmentAnchor(anchor))
+        run("reserveAttachment(${JSONObject.quote(anchor)},${JSONObject.quote(label)})", onComplete)
+    }
+    fun cancelAttachment(anchor: String, onComplete: (Boolean) -> Unit = {}) {
+        require(ru.vlad.triliumnotes.data.isAttachmentAnchor(anchor))
+        run("cancelAttachment(${JSONObject.quote(anchor)})", onComplete)
+    }
+    private fun run(script: String, complete: (Boolean) -> Unit) {
+        command?.invoke(script, complete) ?: complete(false)
+    }
     fun flush(onComplete: () -> Unit) { action?.invoke(onComplete) ?: onComplete() }
 }
 
 @Composable
 fun rememberRichNoteEditorController(): RichNoteEditorController = remember { RichNoteEditorController() }
 
-private class DeliveryState(val initialHtml: String, val initialTitle: String) {
+/** Revision ordering and disposal are shared by bridge events and asynchronous flush snapshots. */
+internal class EditorDeliveryState(initialHtml: String, initialTitle: String) {
     var html = initialHtml
+        private set
     var title = initialTitle
-    var htmlRevision = -1L
-    var titleRevision = -1L
+        private set
+    private var htmlRevision = -1L
+    private var titleRevision = -1L
     var editingApplied = false
+    var disposed = false
+        private set
+
+    fun htmlChanged(value: String, revision: Long, onChange: (String) -> Unit) {
+        if (disposed || revision < htmlRevision) return
+        htmlRevision = revision
+        if (value != html) { html = value; onChange(value) }
+    }
+    fun titleChanged(value: String, revision: Long, onChange: (String) -> Unit) {
+        if (disposed || revision < titleRevision) return
+        titleRevision = revision
+        if (value != title) { title = value; onChange(value) }
+    }
+    fun dispose() { disposed = true }
 }
 
 private class EditorPresentation {
@@ -94,17 +129,9 @@ fun RichNoteEditor(
         val latestServerUrl = rememberUpdatedState(serverUrl)
         val latestSearch = rememberUpdatedState(searchState)
         val activeController = controller ?: rememberRichNoteEditorController()
-        val delivery = remember { DeliveryState(initialHtml, title) }
-        fun deliverHtml(value: String, revision: Long) {
-            if (revision < delivery.htmlRevision) return
-            delivery.htmlRevision = revision
-            if (value != delivery.html) { delivery.html = value; latestHtml.value(value) }
-        }
-        fun deliverTitle(value: String, revision: Long) {
-            if (revision < delivery.titleRevision) return
-            delivery.titleRevision = revision
-            if (value != delivery.title) { delivery.title = value; latestTitle.value(value) }
-        }
+        val delivery = remember { EditorDeliveryState(initialHtml, title) }
+        fun deliverHtml(value: String, revision: Long) = delivery.htmlChanged(value, revision, latestHtml.value)
+        fun deliverTitle(value: String, revision: Long) = delivery.titleChanged(value, revision, latestTitle.value)
         val theme = JSONObject()
             .put("language", language)
             .put("background", cssColor(colors.background.toArgb()))
@@ -255,9 +282,11 @@ fun RichNoteEditor(
             else webView.evaluateJavascript("window.pocketOptions=$theme;window.pocket?.configure(window.pocketOptions)", null)
         }
         DisposableEffect(webView, lifecycle, activeController) {
-            val flush: (() -> Unit) -> Unit = { complete ->
+            val flush: (() -> Unit) -> Unit = flush@{ complete ->
+                if (presentation.disposed) { complete(); return@flush }
                 webView.evaluateJavascript("window.pocket?.snapshot()") { result ->
                     try {
+                        if (presentation.disposed) return@evaluateJavascript
                         val raw = JSONTokener(result).nextValue()
                         if (raw is String) {
                             val snapshot = JSONObject(raw)
@@ -267,7 +296,15 @@ fun RichNoteEditor(
                     } finally { complete() }
                 }
             }
+            val command: (String, (Boolean) -> Unit) -> Unit = command@{ script, complete ->
+                if (presentation.disposed) { complete(false); return@command }
+                webView.evaluateJavascript("window.pocket?.$script") { result ->
+                    if (presentation.disposed) complete(false)
+                    else flush { complete(!presentation.disposed && result == "true") }
+                }
+            }
             activeController.action = flush
+            activeController.command = command
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
                     flush {}
@@ -275,9 +312,11 @@ fun RichNoteEditor(
             }
             lifecycle.addObserver(observer)
             onDispose {
+                delivery.dispose()
                 presentation.disposed = true
                 lifecycle.removeObserver(observer)
                 if (activeController.action === flush) activeController.action = null
+                if (activeController.command === command) activeController.command = null
                 webView.removeJavascriptInterface("PocketNative")
                 webView.destroy()
             }

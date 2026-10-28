@@ -1,0 +1,42 @@
+{
+  "inputs": {
+    "viewer-policy.mjs": {
+      "bytes": 1498,
+      "imports": [],
+      "format": "esm"
+    },
+    "viewer.js": {
+      "bytes": 7574,
+      "imports": [
+        {
+          "path": "viewer-policy.mjs",
+          "kind": "import-statement",
+          "original": "./viewer-policy.mjs"
+        }
+      ],
+      "format": "esm"
+    }
+  },
+  "outputs": {
+    "../../app/src/main/assets/diagrams/vendor/viewer.js.map": {
+      "imports": [],
+      "exports": [],
+      "inputs": {},
+      "bytes": 17249
+    },
+    "../../app/src/main/assets/diagrams/vendor/viewer.js": {
+      "imports": [],
+      "exports": [],
+      "entryPoint": "viewer.js",
+      "inputs": {
+        "viewer-policy.mjs": {
+          "bytesInOutput": 986
+        },
+        "viewer.js": {
+          "bytesInOutput": 5256
+        }
+      },
+      "bytes": 6254
+    }
+  }
+}
