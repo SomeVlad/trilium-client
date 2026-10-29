@@ -8,6 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
+import ru.vlad.triliumnotes.diagrams.DiagramPackages
 
 data class OfflineState(
     val isRunning: Boolean = false,
@@ -17,6 +18,7 @@ data class OfflineState(
     val error: String? = null,
     val complete: Boolean = false,
     val available: Boolean = false,
+    val packagesOnly: Boolean = false,
 )
 
 /** One sequential crawl shared by the foreground and the background worker. */
@@ -25,16 +27,43 @@ class OfflineSync(
     private val api: TriliumApi,
     private val resources: NoteResources,
     private val context: Context,
+    private val diagrams: DiagramPackages = DiagramPackages.get(context),
 ) {
     private fun text(id: Int) = AppLanguage.get(context, id)
     private val mutex = Mutex()
-    private val mutable = MutableStateFlow(OfflineState(available = repository.offlineCopyAvailable))
+    private fun missingPackages() = diagrams.needsFor(repository.cachedVisibleNotes()).filterNot { diagrams.isReady(it) }
+    private fun copyAvailable() = repository.offlineCopyAvailable && missingPackages().isEmpty()
+    private fun packageUpgradeNeeded() = repository.offlineCopyAvailable && missingPackages().isNotEmpty()
+    private val mutable = MutableStateFlow(OfflineState(available = copyAvailable(), packagesOnly = packageUpgradeNeeded()))
     val state = mutable.asStateFlow()
 
-    suspend fun refreshAll(): OfflineState {
+    /** Recheck local files on resume without refetching notes or contacting the package host. */
+    fun refreshReadiness() {
+        if (state.value.isRunning) return
+        val previous = state.value
+        val missing = packageUpgradeNeeded()
+        val available = copyAvailable()
+        val recovered = previous.packagesOnly && available
+        // A viewer can finish installing the only missing part of an offline copy.
+        // Keep genuine note/resource failures visible and scheduled for a full retry.
+        mutable.value = previous.copy(available = available,
+            packagesOnly = missing && (previous.error == null || previous.packagesOnly),
+            complete = if (recovered) true else previous.complete,
+            error = if (recovered) null else previous.error)
+    }
+
+    suspend fun refreshAll(packagesOnly: Boolean = false): OfflineState {
         if (!mutex.tryLock()) return state.value
-        mutable.value = OfflineState(isRunning = true, total = 1, available = repository.offlineCopyAvailable)
+        mutable.value = OfflineState(isRunning = true, total = 1, available = copyAvailable(), packagesOnly = packageUpgradeNeeded())
+        var notesPhaseComplete = packagesOnly && repository.offlineCopyAvailable
         try {
+            // Old APKs saved a complete note copy while keeping renderers inside the APK.
+            // Upgrading that copy needs only the missing packages, not another ETAPI crawl.
+            if (packagesOnly && repository.offlineCopyAvailable) {
+                for (kind in missingPackages()) diagrams.ensure(kind)
+                mutable.value = OfflineState(complete = true, available = copyAvailable())
+                return state.value
+            }
             val sync = repository.syncPending()
             var failures = if (sync.error != null) 1 else 0
             val queue = ArrayDeque<String>().apply { add("root") }
@@ -48,7 +77,7 @@ class OfflineSync(
                     val tree = repository.listChildrenResult(id)
                     if (tree.fromCache) {
                         mutable.value = mutable.value.copy(isRunning = false, complete = false,
-                            error = text(R.string.msg_offline_disconnected))
+                            packagesOnly = false, error = text(R.string.msg_offline_disconnected))
                         return state.value
                     }
                     if (tree.failedBranchIds.isNotEmpty()) failures++
@@ -95,16 +124,30 @@ class OfflineSync(
                     failures++
                 }
             }
-            if (failures == 0) repository.markOfflineCopyAvailable()
-            mutable.value = mutable.value.copy(isRunning = false, complete = failures == 0, available = repository.offlineCopyAvailable,
+            // This marker records the note/resource copy. Public readiness below also
+            // requires every renderer, allowing a failed package to retry on its own.
+            if (failures == 0) {
+                repository.markOfflineCopyAvailable()
+                notesPhaseComplete = true
+            }
+            for (kind in diagrams.needsFor(repository.cachedVisibleNotes())) {
+                try { diagrams.ensure(kind) }
+                catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    failures++
+                }
+            }
+            mutable.value = mutable.value.copy(isRunning = false, complete = failures == 0, available = copyAvailable(),
+                packagesOnly = notesPhaseComplete && packageUpgradeNeeded(),
                 error = if (failures == 0) null else text(R.string.msg_offline_partial))
             return state.value
         } catch (cancelled: CancellationException) {
-            mutable.value = mutable.value.copy(isRunning = false, complete = false)
+            mutable.value = mutable.value.copy(isRunning = false, complete = false,
+                available = copyAvailable(), packagesOnly = notesPhaseComplete && packageUpgradeNeeded())
             throw cancelled
         } catch (_: Exception) {
             mutable.value = mutable.value.copy(isRunning = false, complete = false,
-                error = text(R.string.msg_offline_failed))
+                available = copyAvailable(), packagesOnly = notesPhaseComplete && packageUpgradeNeeded(), error = text(R.string.msg_offline_failed))
             return state.value
         } finally {
             mutex.unlock()

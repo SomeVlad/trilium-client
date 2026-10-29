@@ -19,6 +19,8 @@ object NotesSyncScheduler {
     internal const val SESSION_ID = "session-id"
     internal const val SESSION_TAG_PREFIX = "notes-session-"
     internal const val UPLOAD_ONLY = "upload-only"
+    internal const val PACKAGES_ONLY = "packages-only"
+    internal const val PACKAGES_WORK_NAME = "diagram-packages"
     private val connected = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
     /** Explicit full refresh. Keep the original name for work queued by older versions. */
@@ -29,7 +31,14 @@ object NotesSyncScheduler {
 
     /** A completed copy survives activity stop/start; only a missing or failed copy needs a crawl. */
     fun ensureOfflineCopy(context: Context, state: OfflineState): Operation? =
-        if (!state.isRunning && (!state.available || state.error != null)) scheduleOneTime(context) else null
+        if (!state.isRunning && (!state.available || state.error != null)) {
+            if (state.packagesOnly) WorkManager.getInstance(context.applicationContext)
+                .enqueueUniqueWork(workName(context, PACKAGES_WORK_NAME), ExistingWorkPolicy.KEEP,
+                    OneTimeWorkRequest.Builder(NotesSyncWorker::class.java).setConstraints(connected)
+                        .setInputData(workDataOf(SESSION_ID to sessionId(context), PACKAGES_ONLY to true))
+                        .addTag(sessionTag(context)).build())
+            else scheduleOneTime(context)
+        } else null
 
     /** Durable edits have their own job and never reset offline download progress. */
     fun schedulePending(context: Context): Operation = WorkManager.getInstance(context.applicationContext)

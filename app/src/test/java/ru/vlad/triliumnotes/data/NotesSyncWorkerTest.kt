@@ -3,6 +3,7 @@ package ru.vlad.triliumnotes.data
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.work.Configuration
+import androidx.work.Data
 import androidx.work.ListenableWorker
 import androidx.work.WorkInfo
 import androidx.work.WorkerFactory
@@ -31,11 +32,18 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.nio.file.Files
+import java.security.MessageDigest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import ru.vlad.triliumnotes.ConnectionState
+import ru.vlad.triliumnotes.diagrams.DiagramPackages
+import ru.vlad.triliumnotes.diagrams.DiagramPackageSpec
+import okio.Buffer
 
 @RunWith(RobolectricTestRunner::class)
 class NotesSyncWorkerTest {
@@ -50,7 +58,11 @@ class NotesSyncWorkerTest {
     @Volatile private var draftDuringAttachments = false
     @Volatile private var includeChild = false
     @Volatile private var remoteHtml = "<p>Cached root</p>"
+    @Volatile private var rootType = "text"
+    @Volatile private var rendererBytes: ByteArray? = null
+    @Volatile private var failRenderer = false
     private val requests = ConcurrentLinkedQueue<String>()
+    private val workerInputs = ConcurrentLinkedQueue<Data>()
     private var childAttachmentsEntered: CountDownLatch? = null
     private var releaseChildAttachments: CountDownLatch? = null
 
@@ -65,8 +77,10 @@ class NotesSyncWorkerTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 requests += "${request.method} ${request.path}"
                 if (unavailable) return MockResponse().setResponseCode(503)
+                if (request.path == "/renderer.zip") return if (failRenderer) MockResponse().setResponseCode(503)
+                    else MockResponse().setBody(Buffer().write(requireNotNull(rendererBytes)))
                 return when (request.path) {
-                    "/etapi/notes/root" -> MockResponse().setBody("""{"noteId":"root","title":"Root","type":"text","mime":"text/html","blobId":"versionA","childBranchIds":${if (includeChild) "[\"branch\"]" else "[]"}}""")
+                    "/etapi/notes/root" -> MockResponse().setBody("""{"noteId":"root","title":"Root","type":"$rootType","mime":"text/html","blobId":"versionA","childBranchIds":${if (includeChild) "[\"branch\"]" else "[]"}}""")
                     "/etapi/notes/root/content" -> {
                         if (request.method == "PUT") remoteHtml = request.body.readUtf8()
                         MockResponse().setBody(remoteHtml)
@@ -96,9 +110,11 @@ class NotesSyncWorkerTest {
         singleton.set(null, services)
         factory = object : WorkerFactory() {
             override fun createWorker(appContext: Context, workerClassName: String,
-                workerParameters: WorkerParameters): ListenableWorker? =
-                if (workerClassName == NotesSyncWorker::class.java.name)
-                    NotesSyncWorker(appContext, workerParameters, services) else null
+                workerParameters: WorkerParameters): ListenableWorker? {
+                if (workerClassName != NotesSyncWorker::class.java.name) return null
+                workerInputs += workerParameters.inputData
+                return NotesSyncWorker(appContext, workerParameters, services)
+            }
         }
     }
 
@@ -109,8 +125,8 @@ class NotesSyncWorkerTest {
         directory.deleteRecursively()
     }
 
-    private fun worker(): NotesSyncWorker = TestListenableWorkerBuilder<NotesSyncWorker>(context)
-        .setWorkerFactory(factory).build()
+    private fun worker(runAttemptCount: Int = 0): NotesSyncWorker = TestListenableWorkerBuilder<NotesSyncWorker>(context)
+        .setRunAttemptCount(runAttemptCount).setWorkerFactory(factory).build()
 
     private fun workManager(): WorkManager {
         WorkManagerTestInitHelper.initializeTestWorkManager(context, Configuration.Builder()
@@ -202,6 +218,7 @@ class NotesSyncWorkerTest {
         val requestCount = server.requestCount
 
         repeat(4) {
+            services.offline.refreshReadiness()
             assertNull(NotesSyncScheduler.ensureOfflineCopy(context, services.offline.state.value))
             NotesSyncScheduler.schedulePending(context).result.get()
             assertEquals(WorkInfo.State.SUCCEEDED, runPending(manager, NotesSyncScheduler.PENDING_WORK_NAME).state)
@@ -218,6 +235,77 @@ class NotesSyncWorkerTest {
         NotesSyncScheduler.scheduleOneTime(context).result.get()
         assertEquals(WorkInfo.State.SUCCEEDED, runPending(manager, NotesSyncScheduler.ONE_TIME_WORK_NAME).state)
         assertTrue(server.requestCount > requestCount)
+    }
+
+    @Test fun automaticRuntimeUpgradeKeepsOneSeparatePackageJobAndDoesNotCrawlNotes() = runBlocking {
+        assertTrue(services.offline.refreshAll().complete)
+        val manager = workManager()
+        requests.clear()
+        // OfflineSyncTest covers deriving this state from a real missing renderer.
+        // Here the boundary is the durable scheduler input and the worker's chosen path.
+        val upgrade = OfflineState(available = false, packagesOnly = true)
+        repeat(3) { NotesSyncScheduler.ensureOfflineCopy(context, upgrade)!!.result.get() }
+        val queued = manager.getWorkInfosForUniqueWork(NotesSyncScheduler.PACKAGES_WORK_NAME).get()
+        assertEquals(1, queued.size)
+        assertEquals(WorkInfo.State.ENQUEUED, queued.single().state)
+        assertTrue(manager.getWorkInfosForUniqueWork(NotesSyncScheduler.ONE_TIME_WORK_NAME).get().isEmpty())
+
+        assertEquals(WorkInfo.State.SUCCEEDED, runPending(manager, NotesSyncScheduler.PACKAGES_WORK_NAME).state)
+
+        assertTrue(workerInputs.single().getBoolean(NotesSyncScheduler.PACKAGES_ONLY, false))
+        assertFalse(workerInputs.single().getBoolean(NotesSyncScheduler.UPLOAD_ONLY, false))
+        assertTrue("A package-only worker must not refetch cached notes", requests.isEmpty())
+        assertTrue(services.offline.state.value.available)
+        assertNull(NotesSyncScheduler.ensureOfflineCopy(context, services.offline.state.value))
+    }
+
+    @Test fun explicitRefreshRemainsFullWhileAnAutomaticPackageUpgradeIsQueued() = runBlocking {
+        assertTrue(services.offline.refreshAll().complete)
+        val manager = workManager()
+        requests.clear()
+        NotesSyncScheduler.ensureOfflineCopy(context, OfflineState(packagesOnly = true))!!.result.get()
+        NotesSyncScheduler.scheduleOneTime(context).result.get()
+        val packages = manager.getWorkInfosForUniqueWork(NotesSyncScheduler.PACKAGES_WORK_NAME).get().single()
+        val full = manager.getWorkInfosForUniqueWork(NotesSyncScheduler.ONE_TIME_WORK_NAME).get().single()
+        assertFalse(packages.id == full.id)
+
+        assertEquals(WorkInfo.State.SUCCEEDED, runPending(manager, NotesSyncScheduler.ONE_TIME_WORK_NAME).state)
+
+        assertFalse(workerInputs.single().getBoolean(NotesSyncScheduler.PACKAGES_ONLY, false))
+        assertFalse(workerInputs.single().getBoolean(NotesSyncScheduler.UPLOAD_ONLY, false))
+        assertTrue("Manual refresh must crawl the server even with a completed marker", requests.contains("GET /etapi/notes/root"))
+        assertEquals(WorkInfo.State.ENQUEUED, manager.getWorkInfoById(packages.id).get()!!.state)
+    }
+
+    @Test fun automaticWorkerRetryFetchesOnlyFailedPackageWhileFreshManualWorkerStillCrawls() = runBlocking {
+        val bytes = ByteArrayOutputStream().also { output ->
+            ZipOutputStream(output).use { zip ->
+                zip.putNextEntry(ZipEntry("mermaid.js")); zip.write("renderer".toByteArray()); zip.closeEntry()
+            }
+        }.toByteArray()
+        rendererBytes = bytes
+        rootType = "mermaid"
+        failRenderer = true
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        val packages = DiagramPackages(File(directory, "test-renderers"), mapOf("mermaid" to DiagramPackageSpec(
+            server.url("/renderer.zip").toString(), digest, bytes.size.toLong(), 8, setOf("mermaid.js"),
+        )))
+        // Inject the local fixture at the service boundary without changing production construction.
+        NotesServices::class.java.getDeclaredField("offline").apply { isAccessible = true }.set(services,
+            OfflineSync(services.repository, services.api, services.resources, context, packages))
+        assertEquals(ListenableWorker.Result.retry(), worker().doWork())
+        assertTrue(services.offline.state.value.packagesOnly)
+
+        requests.clear()
+        assertEquals(ListenableWorker.Result.retry(), worker().doWork())
+        assertTrue("A newly requested manual worker must retain its full refresh", requests.contains("GET /etapi/notes/root"))
+
+        requests.clear()
+        failRenderer = false
+        val retry = worker(runAttemptCount = 1)
+        assertEquals(ListenableWorker.Result.success(), retry.doWork())
+        assertEquals(listOf("GET /renderer.zip"), requests.toList())
+        assertTrue(services.offline.state.value.available)
     }
 
     @Test fun durableEditUploadsWithoutCrawlingTreeOrResettingCompletedCounters() = runBlocking {

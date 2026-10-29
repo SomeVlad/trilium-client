@@ -59,6 +59,7 @@ import ru.vlad.triliumnotes.NotesViewModel
 import ru.vlad.triliumnotes.data.*
 import ru.vlad.triliumnotes.capture.*
 import ru.vlad.triliumnotes.diagrams.DiagramViewer
+import ru.vlad.triliumnotes.diagrams.DiagramPackages
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -736,6 +737,7 @@ internal fun EditorScreen(
     editorHandoff: EditorHandoff? = null,
     onEditingChanged: (Boolean) -> Unit = {},
     uploadState: AttachmentUploadState = AttachmentUploadState(),
+    diagramPackages: DiagramPackages? = null,
 ) {
     val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
@@ -926,7 +928,7 @@ internal fun EditorScreen(
             }
             key(document.note.id, state.editorEpoch) {
                 if (diagram) {
-                    DiagramViewer(document.note.id, document.note.type, document.html, Modifier.fillMaxWidth().weight(1f))
+                    DiagramViewer(document.note.id, document.note.type, document.html, Modifier.fillMaxWidth().weight(1f), packages = diagramPackages)
                 } else if (document.note.isProtected || (readOnly && !htmlNote && !attachment)) {
                     SpecialNoteContent(document.note, initialHtml, onOpenLink, Modifier.fillMaxWidth().weight(1f), serverUrl)
                 } else if (attachment) {

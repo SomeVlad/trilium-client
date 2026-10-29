@@ -27,6 +27,8 @@ import org.json.JSONTokener
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
 import ru.vlad.triliumnotes.AppLanguage
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -35,6 +37,9 @@ import java.util.concurrent.TimeUnit
 /** Only synthetic in-memory scenes. No login, NotesServices or owner documents are opened. */
 class DiagramViewerTest {
     @get:Rule val compose = createComposeRule()
+    private lateinit var fixture: DiagramTestPackages
+    @Before fun prepareOfflineRuntimes() { fixture = officialDiagramTestPackages() }
+    @After fun removeSyntheticPackages() { fixture.close() }
     @Test fun officialMermaidAndExcalidrawRenderOfflineInBothThemesWithZoomAndScreenshots() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val previousLanguage = AppLanguage.preference(context)
@@ -44,7 +49,7 @@ class DiagramViewerTest {
         val source = "flowchart LR\n A[Capture] --> B[Inbox]\n B --> C[Note]\n C --> D[Offline sync]"
         compose.setContent {
             MaterialTheme(colorScheme = if (dark) darkColorScheme() else lightColorScheme()) {
-                key(revision) { DiagramViewer("synthetic-$revision", kind, if (kind == "mermaid") source else canvas(), Modifier.fillMaxSize()) }
+                key(revision) { DiagramViewer("synthetic-$revision", kind, if (kind == "mermaid") source else canvas(), Modifier.fillMaxSize(), packages = fixture.packages) }
             }
         }
         try {
@@ -72,7 +77,7 @@ class DiagramViewerTest {
         }
     }
     @Test fun malformedSceneDisplaysErrorAndDoesNotExposeNativeDataInterface() {
-        compose.setContent { MaterialTheme { DiagramViewer("malformed", "canvas", "{broken", Modifier.fillMaxSize()) } }
+        compose.setContent { MaterialTheme { DiagramViewer("malformed", "canvas", "{broken", Modifier.fillMaxSize(), packages = fixture.packages) } }
         compose.waitUntil(30_000) { js("Boolean(window.diagram?.error)") == "true" }
         assertEquals("undefined", js("typeof window.PocketNative").trim('"'))
         assertEquals("0", js("document.querySelectorAll('#surface iframe,#surface script').length"))

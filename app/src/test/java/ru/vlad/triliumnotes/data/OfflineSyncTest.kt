@@ -22,6 +22,13 @@ import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import okio.Buffer
+import ru.vlad.triliumnotes.diagrams.DiagramPackageSpec
+import ru.vlad.triliumnotes.diagrams.DiagramPackages
 
 @RunWith(RobolectricTestRunner::class)
 class OfflineSyncTest {
@@ -34,6 +41,14 @@ class OfflineSyncTest {
     private var failRoot = false
     private var version = "v1"
     private var fileMime = "application/pdf"
+    private var textType = "text"
+    private var protectedText = false
+    private var failPackage = false
+    private val packageBytes = ByteArrayOutputStream().also { bytes ->
+        ZipOutputStream(bytes).use { zip ->
+            zip.putNextEntry(ZipEntry("mermaid.js")); zip.write("renderer".toByteArray()); zip.closeEntry()
+        }
+    }.toByteArray()
     private var attachmentBlob = "attachmentV1"
     private var bodyOverride: String? = null
     private var allowWrites = false
@@ -42,9 +57,9 @@ class OfflineSyncTest {
     private var releaseBody: CountDownLatch? = null
 
     private fun meta(id: String): JSONObject = JSONObject()
-        .put("noteId", id).put("title", id).put("type", if (id == "fileAAAA") "file" else "text")
+        .put("noteId", id).put("title", id).put("type", if (id == "fileAAAA") "file" else if (id == "textAAAA") textType else "text")
         .put("mime", if (id == "fileAAAA") fileMime else "text/html")
-        .put("blobId", version).put("utcDateModified", version).put("isProtected", false)
+        .put("blobId", version).put("utcDateModified", version).put("isProtected", protectedText && id == "textAAAA")
         .put("parentNoteIds", JSONArray(if (id == "root") emptyList<String>() else listOf("root")))
         .put("childBranchIds", JSONArray(if (id == "root") listOf("branchText", "branchFile", "branchHidden") else emptyList<String>()))
 
@@ -57,6 +72,8 @@ class OfflineSyncTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val path = request.requestUrl!!.encodedPath
                 synchronized(requests) { requests += path }
+                if (path == "/diagram.zip") return if (failPackage) MockResponse().setResponseCode(503)
+                    else MockResponse().setBody(Buffer().write(packageBytes))
                 if (failRoot && path == "/etapi/notes/root") return MockResponse().setResponseCode(503)
                 if (request.method != "GET") {
                     mutationCount++
@@ -102,7 +119,126 @@ class OfflineSyncTest {
 
     @After fun stop() { server.shutdown(); directory.deleteRecursively() }
     private fun ok(json: JSONObject) = MockResponse().setBody(json.toString())
-    private fun coordinator(repository: NotesRepository) = OfflineSync(repository, api, NoteResources(context, api, server.url("/").toString()), context)
+    private fun coordinator(repository: NotesRepository, diagrams: DiagramPackages = DiagramPackages.get(context)) =
+        OfflineSync(repository, api, NoteResources(context, api, server.url("/").toString()), context, diagrams)
+
+    private fun diagramPackages(): DiagramPackages {
+        val hash = MessageDigest.getInstance("SHA-256").digest(packageBytes).joinToString("") { "%02x".format(it) }
+        return DiagramPackages(File(directory, "diagram-packages"), mapOf("mermaid" to DiagramPackageSpec(
+            server.url("/diagram.zip").toString(), hash, packageBytes.size.toLong(), "renderer".length.toLong(), setOf("mermaid.js"),
+        )))
+    }
+
+    @Test fun diagramPackageFailureLeavesNotesCachedButCannotCompleteOfflineCopy() = runBlocking {
+        textType = "mermaid"
+        failPackage = true
+        val repository = NotesRepository(context, api)
+        val sync = coordinator(repository, diagramPackages())
+        assertFalse(sync.refreshAll().complete)
+        assertTrue("The note/resource phase is saved independently of renderer readiness", repository.offlineCopyAvailable)
+        assertFalse(sync.state.value.available)
+        assertTrue(sync.state.value.packagesOnly)
+        assertNotNull(repository.cachedNote("textAAAA"))
+        assertTrue(File(directory, "note-resources/note_fileAAAA.data").isFile)
+        assertEquals("Package failure must follow the remaining note/resource work", "/diagram.zip", requests.last())
+        failPackage = false
+        requests.clear()
+        assertTrue(sync.refreshAll(packagesOnly = sync.state.value.packagesOnly).complete)
+        assertTrue(sync.state.value.available)
+        assertEquals("Retry must fetch only the failed renderer", listOf("/diagram.zip"), requests)
+        requests.clear()
+        assertTrue(sync.refreshAll().complete)
+        assertFalse("A ready package must never be requested again", requests.contains("/diagram.zip"))
+    }
+
+    @Test fun viewerPackageRecoveryMakesResumeReadyWithoutSchedulingAnotherCrawl() = runBlocking {
+        textType = "mermaid"
+        failPackage = true
+        val packages = diagramPackages()
+        val sync = coordinator(NotesRepository(context, api), packages)
+        assertFalse(sync.refreshAll().complete)
+        assertTrue(sync.state.value.packagesOnly)
+        assertNotNull(sync.state.value.error)
+
+        requests.clear()
+        failPackage = false
+        packages.ensure("mermaid") // The same installation performed by the viewer's Retry action.
+        sync.refreshReadiness()
+
+        assertTrue(sync.state.value.available)
+        assertTrue(sync.state.value.complete)
+        assertFalse(sync.state.value.packagesOnly)
+        assertNull(sync.state.value.error)
+        assertNull(NotesSyncScheduler.ensureOfflineCopy(context, sync.state.value))
+        sync.refreshReadiness()
+        assertNull(NotesSyncScheduler.ensureOfflineCopy(context, sync.state.value))
+        assertEquals(listOf("/diagram.zip"), requests)
+    }
+
+    @Test fun viewerRecoveryPreservesKnownNoteFailureWhenAnOlderCopyAlreadyExists() = runBlocking {
+        textType = "mermaid"
+        val packages = diagramPackages()
+        val sync = coordinator(NotesRepository(context, api), packages)
+        assertTrue(sync.refreshAll().complete)
+        File(directory, "diagram-packages").deleteRecursively()
+        version = "v2"
+        failBody = true
+        failPackage = true
+        assertFalse(sync.refreshAll().complete)
+        val error = sync.state.value.error
+        assertNotNull(error)
+        assertFalse("The old raw marker must not hide a failure in the current note phase", sync.state.value.packagesOnly)
+        sync.refreshReadiness()
+        assertFalse(sync.state.value.packagesOnly)
+
+        failPackage = false
+        packages.ensure("mermaid")
+        sync.refreshReadiness()
+
+        assertTrue(sync.state.value.available)
+        assertFalse(sync.state.value.complete)
+        assertFalse(sync.state.value.packagesOnly)
+        assertEquals(error, sync.state.value.error)
+    }
+
+    @Test fun oldOfflineMarkerUpgradesOnlyMissingPackagesAndRetriesWithoutRefetchingNotes() = runBlocking {
+        textType = "mermaid"
+        val repository = NotesRepository(context, api)
+        val packages = diagramPackages()
+        assertTrue(coordinator(repository, packages).refreshAll().complete)
+        File(directory, "diagram-packages").deleteRecursively()
+        requests.clear()
+        val restarted = coordinator(NotesRepository(context, api), diagramPackages())
+        assertFalse(restarted.state.value.available)
+        assertTrue(restarted.state.value.packagesOnly)
+        failPackage = true
+        assertFalse(restarted.refreshAll(packagesOnly = true).complete)
+        assertTrue(restarted.state.value.packagesOnly)
+        assertEquals(listOf("/diagram.zip"), requests)
+        requests.clear()
+        failPackage = false
+        assertTrue(restarted.refreshAll(packagesOnly = true).complete)
+        assertTrue(restarted.state.value.available)
+        assertFalse(restarted.state.value.packagesOnly)
+        assertEquals(listOf("/diagram.zip"), requests)
+        requests.clear()
+        restarted.refreshReadiness()
+        assertTrue(restarted.state.value.available)
+        assertTrue(requests.isEmpty())
+        assertTrue(restarted.refreshAll().complete)
+        assertTrue("Explicit refresh must still crawl notes", requests.contains("/etapi/notes/root"))
+        assertFalse(requests.contains("/diagram.zip"))
+    }
+
+    @Test fun protectedDiagramDoesNotNeedOrDownloadRuntime() = runBlocking {
+        textType = "mermaid"
+        protectedText = true
+        failPackage = true
+        val repository = NotesRepository(context, api)
+        assertTrue(coordinator(repository, diagramPackages()).refreshAll().complete)
+        assertFalse(requests.contains("/diagram.zip"))
+        assertTrue(repository.offlineCopyAvailable)
+    }
 
     @Test fun fullCopyIncludesBodiesBinaryAndAttachmentsAndSurvivesRepositoryRestart() = runBlocking {
         val repository = NotesRepository(context, api)

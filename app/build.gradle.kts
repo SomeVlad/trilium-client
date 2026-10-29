@@ -85,8 +85,22 @@ val generateLegalAssets = tasks.register("generateLegalAssets") {
         directory.resolve("index.txt").writeText(index.joinToString("\n"))
     }
 }
-android.sourceSets["main"].assets.srcDir(legalAssets)
-tasks.named("preBuild").configure { dependsOn(generateLegalAssets) }
+// Keep complete vendor sources in Git/source archives; install large renderers
+// and every Canvas font from the independently versioned diagram packages.
+// AGP's asset merger does not honor AndroidSourceDirectorySet excludes, so it
+// receives a physically filtered directory instead of the original asset root.
+val filteredMainAssets = layout.buildDirectory.dir("generated/filteredMainAssets")
+val generateFilteredMainAssets = tasks.register<Sync>("generateFilteredMainAssets") {
+    from("src/main/assets") {
+        exclude("diagrams/vendor/mermaid.js", "diagrams/vendor/excalidraw.js", "diagrams/vendor/fonts/**")
+    }
+    into(filteredMainAssets)
+}
+android.sourceSets["main"].assets.setSrcDirs(listOf(filteredMainAssets, legalAssets))
+// Instrumentation exercises the exact renderers through an offline package
+// transport fixture; these assets belong to the test APK only.
+android.sourceSets["androidTest"].assets.srcDir("src/main/assets")
+tasks.named("preBuild").configure { dependsOn(generateLegalAssets, generateFilteredMainAssets) }
 
 // Kept for existing CI commands: demoBuild now only disables local release signing.
 // Server addresses and credentials are always entered on the device.
@@ -124,8 +138,8 @@ android {
         applicationId = "ru.vlad.triliumnotes"
         minSdk = 28
         targetSdk = 36
-        versionCode = 22
-        versionName = "0.6.2"
+        versionCode = 23
+        versionName = "0.6.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
     }

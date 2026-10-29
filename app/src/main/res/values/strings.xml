@@ -48,7 +48,7 @@
     <string name="sending_changes_progress">"Отправка изменений…"</string>
     <string name="changes_send_automatically">"Изменения отправятся автоматически."</string>
     <string name="send">"Отправить"</string>
-    <string name="downloading_attachments">"Скачивание вложений…"</string>
+    <string name="downloading_attachments">"Скачивание ресурсов…"</string>
     <string name="attachment_download_error">"Не удалось загрузить вложение. Проверьте подключение и повторите."</string>
     <string name="file_save_error">"Не удалось сохранить файл в выбранное место."</string>
     <string name="retry">"Повторить"</string>

@@ -11,10 +11,18 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebSettings
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
+import kotlinx.coroutines.CancellationException
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
@@ -30,7 +38,45 @@ import java.io.ByteArrayInputStream
 /** An offline renderer with no service references, server resources, credentials, or editing callbacks. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun DiagramViewer(noteKey: String, kind: String, content: String, modifier: Modifier = Modifier) {
+fun DiagramViewer(noteKey: String, kind: String, content: String, modifier: Modifier = Modifier,
+    packages: DiagramPackages? = null,
+) {
+    require(kind == "mermaid" || kind == "canvas")
+    val context = LocalContext.current
+    val store = packages ?: remember(context.applicationContext) { DiagramPackages.get(context) }
+    val packageRevision by store.changes.collectAsState()
+    var ready by remember(noteKey, kind, store) { mutableStateOf(store.isReady(kind)) }
+    var failed by remember(noteKey, kind, store) { mutableStateOf(false) }
+    var attempt by remember(noteKey, kind, store) { mutableIntStateOf(0) }
+    LaunchedEffect(noteKey, kind, store, attempt, packageRevision) {
+        if (!ready) {
+            failed = false
+            try { store.ensure(kind); ready = true }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { failed = true }
+        }
+    }
+    if (ready) {
+        key(noteKey, kind) { ReadyDiagramViewer(noteKey, kind, content, modifier, store) }
+    } else {
+        Box(modifier.testTag("diagram_viewer"), contentAlignment = Alignment.Center) {
+            Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (!failed) CircularProgressIndicator(Modifier.testTag("diagram-package-loading"))
+                Text(AppLanguage.get(context, if (failed) R.string.diagram_download_failed else R.string.diagram_downloading),
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.testTag(if (failed) "diagram-package-error" else "diagram-package-status"))
+                if (failed) TextButton(onClick = { failed = false; attempt++ }, modifier = Modifier.testTag("diagram-package-retry")) {
+                    Text(AppLanguage.get(context, R.string.retry))
+                }
+            }
+        }
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun ReadyDiagramViewer(noteKey: String, kind: String, content: String, modifier: Modifier, packages: DiagramPackages) {
     require(kind == "mermaid" || kind == "canvas")
     val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
@@ -78,7 +124,7 @@ fun DiagramViewer(noteKey: String, kind: String, content: String, modifier: Modi
                             else -> return blocked()
                         }
                         WebResourceResponse(mime, if (mime.startsWith("font/")) null else "UTF-8", 200, "OK",
-                            mapOf("Cache-Control" to "no-store"), context.assets.open(path))
+                            mapOf("Cache-Control" to "no-store"), (packages.openAsset(path) ?: context.assets.open(path)))
                     } catch (_: Exception) { blocked() }
                 }
                 override fun onPageFinished(view: WebView, url: String) {

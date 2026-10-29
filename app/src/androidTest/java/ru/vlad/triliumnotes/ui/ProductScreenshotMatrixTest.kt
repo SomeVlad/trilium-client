@@ -53,6 +53,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import ru.vlad.triliumnotes.BuildConfig
@@ -64,6 +65,8 @@ import ru.vlad.triliumnotes.data.NoteMeta
 import ru.vlad.triliumnotes.data.OfflineState
 import ru.vlad.triliumnotes.data.SyncState
 import ru.vlad.triliumnotes.data.TreeItem
+import ru.vlad.triliumnotes.diagrams.DiagramTestPackages
+import ru.vlad.triliumnotes.diagrams.officialDiagramTestPackages
 import ru.vlad.triliumnotes.editor.EditorResource
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -73,10 +76,12 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Presentation audit: real production screens + real WebView/editor, only synthetic state/files.
  * Run core/attachments in system light mode, darkKeys in system dark mode (for the actual IME).
- * No NotesServices, HTTP client, production URL, or owner corpus is used by this harness.
+ * No NotesServices, real network, production URL, or owner corpus is used by this harness.
  */
 class ProductScreenshotMatrixTest {
     @get:Rule val compose = createComposeRule()
+    private var diagramFixture: DiagramTestPackages? = null
+    @After fun removeSyntheticDiagramPackages() { diagramFixture?.close() }
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
     private val output get() = File(requireNotNull(context.getExternalFilesDir(null)), "product-review").apply { mkdirs() }
@@ -254,6 +259,8 @@ class ProductScreenshotMatrixTest {
         val requested = InstrumentationRegistry.getArguments().getString("reviewIds")?.split(',')?.toSet()
         val shots = allShots.filter { it.group >= from && (requested == null || it.id in requested) }
         require(shots.isNotEmpty())
+        if (shots.any { it.document?.note?.type in setOf("mermaid", "canvas") })
+            diagramFixture = officialDiagramTestPackages()
         var current by mutableStateOf(shots.first())
         var generation by mutableStateOf(0)
         val base = Configuration(context.resources.configuration)
@@ -278,7 +285,8 @@ class ProductScreenshotMatrixTest {
                     else EditorScreen(s.state.copy(document = s.document), s.document, s.sync,
                         onBack = {}, onTitleChanged = {}, onHtmlChanged = {}, onSync = {}, onKeepConflictAsCopy = {},
                         resourceLoader = { EditorResource("image/png", imageBytes()) },
-                        attachmentLoader = { if (s.attachment == "loading") awaitCancellation() else attachment(s.attachment ?: "error") })
+                        attachmentLoader = { if (s.attachment == "loading") awaitCancellation() else attachment(s.attachment ?: "error") },
+                        diagramPackages = diagramFixture?.packages)
                     }
                 } }
             }

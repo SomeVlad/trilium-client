@@ -10,6 +10,7 @@ import java.io.IOException
 import android.util.AtomicFile
 import org.json.JSONObject
 import java.util.UUID
+import ru.vlad.triliumnotes.diagrams.DiagramPackages
 
 class LegacyImportException(val messageId: Int, vararg val arguments: Any) : IOException("Legacy import failed")
 
@@ -22,7 +23,8 @@ class NotesServices internal constructor(
 ) {
     val repository = NotesRepository(context, api)
     val resources = NoteResources(context, api, serverUrl)
-    val offline = OfflineSync(repository, api, resources, context)
+    val diagramPackages = DiagramPackages.get(context.applicationContext)
+    val offline = OfflineSync(repository, api, resources, context, diagramPackages)
     val libraryPreferences = LibraryPreferences(context)
     val attachments = AttachmentManager(context, api, repository)
     @Volatile var attachmentInsertionHandler: (suspend (PendingAttachmentUpload, AttachmentMeta) -> Unit)? = null

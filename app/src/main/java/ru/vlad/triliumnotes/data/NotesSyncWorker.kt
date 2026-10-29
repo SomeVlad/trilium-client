@@ -23,8 +23,10 @@ class NotesSyncWorker internal constructor(
         val uploads = services.uploads.syncPending()
         val attachmentEdits = services.attachments.syncPending()
         services.repository.syncPending()
+        val packagesOnly = inputData.getBoolean(NotesSyncScheduler.PACKAGES_ONLY, false) ||
+            (runAttemptCount > 0 && services.offline.state.value.packagesOnly)
         val offline = if (inputData.getBoolean(NotesSyncScheduler.UPLOAD_ONLY, false)) null
-            else services.offline.refreshAll()
+            else services.offline.refreshAll(packagesOnly = packagesOnly)
         val pending = services.repository.syncState.value
         // A foreground crawl may already be running, or a new edit may have arrived
         // after this crawl took its outbox snapshot. Keep durable work scheduled.

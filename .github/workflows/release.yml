@@ -90,7 +90,8 @@ jobs:
           mkdir -p release-assets
           cp app/build/outputs/apk/release/app-release.apk "release-assets/trilium-client-$RELEASE_VERSION.apk"
           scripts/package-source.sh "$RELEASE_TAG" "release-assets/trilium-client-$RELEASE_VERSION-source.tar.gz"
-          (cd release-assets && sha256sum ./*.apk ./*.tar.gz > SHA256SUMS)
+          python3 scripts/package-diagrams.py release-assets
+          (cd release-assets && sha256sum ./*.apk ./*.tar.gz ./*canvas*.zip ./*mermaid*.zip > SHA256SUMS)
       - name: Publish verified assets
         env:
           GH_TOKEN: ${{ github.token }}

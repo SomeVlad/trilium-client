@@ -141,6 +141,9 @@ class NotesViewModel(application: Application,
         services.attachmentInsertionHandler = insertionHandler
         services.attachments.syncGate = metadataSyncGate
         viewModelScope.launch {
+            services.diagramPackages.changes.collect { services.offline.refreshReadiness() }
+        }
+        viewModelScope.launch {
             for (draft in writes) {
                 try {
                     repository.saveDraft(draft.id, draft.title, draft.html)
@@ -549,6 +552,7 @@ class NotesViewModel(application: Application,
         networkAvailable = getApplication<Application>().hasValidatedInternet()
         mutable.update { it.copy(networkAvailable = networkAvailable) }
         NotesSyncScheduler.ensurePeriodic(getApplication())
+        services.offline.refreshReadiness()
         NotesSyncScheduler.ensureOfflineCopy(getApplication(), offlineState.value)
         schedulePendingChanges()
         syncNow()
@@ -559,6 +563,7 @@ class NotesViewModel(application: Application,
         networkAvailable = true
         mutable.update { it.copy(networkAvailable = true) }
         mutableHistory.update { it?.copy(allowRestore = true) }
+        services.offline.refreshReadiness()
         NotesSyncScheduler.ensureOfflineCopy(getApplication(), offlineState.value)
         schedulePendingChanges()
         syncNow()

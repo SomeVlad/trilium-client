@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,6 +22,7 @@ def load(name, path):
 
 verify = load("verify_release", "scripts/verify-release.py")
 publisher = load("release_publish", "scripts/release-publish.py")
+packages = load("package_diagrams", "scripts/package-diagrams.py")
 
 
 class ReleaseTest(unittest.TestCase):
@@ -80,10 +82,29 @@ class ReleaseTest(unittest.TestCase):
     def assets(self):
         self.build.unlink()
         names = ["trilium-client-1.2.3.apk", "trilium-client-1.2.3-source.tar.gz"]
-        for name in names:
-            (self.path / name).write_bytes(name.encode())
+        manifest = {"schemaVersion": 1, "packages": {}}
+        # An app patch deliberately reuses the previous content release.
+        for kind in ("canvas", "mermaid"):
+            name = f"diagram-{kind}-v1.2.2.zip"
+            files = {"THIRD_PARTY_NOTICES.txt": b"MIT", "UPSTREAM_LICENSES.txt": b"OFL"}
+            files["mermaid.js" if kind == "mermaid" else "excalidraw.js"] = b"renderer"
+            if kind == "canvas":
+                files["fonts/Virgil/font.woff2"] = b"font"
+            data = packages.archive_bytes(files)
+            (self.path / name).write_bytes(data)
+            names.append(name)
+            manifest["packages"][kind] = {
+                "version": "v1.2.2", "url": f"https://github.com/SomeVlad/trilium-client/releases/download/v1.2.2/{name}",
+                "sha256": hashlib.sha256(data).hexdigest(), "size": len(data),
+                "unpackedSize": sum(map(len, files.values())), "files": sorted(files),
+            }
+        with ZipFile(self.path / names[0], "w") as apk:
+            apk.writestr("assets/diagrams/packages.json", json.dumps(manifest))
+            for name in ("index.html", "viewer.css", "vendor/viewer.js", "vendor/THIRD_PARTY_NOTICES.txt", "vendor/UPSTREAM_LICENSES.txt"):
+                apk.writestr("assets/diagrams/" + name, "shell or license")
+        (self.path / names[1]).write_bytes(b"corresponding sources")
         (self.path / "SHA256SUMS").write_text("".join(
-            f"{hashlib.sha256(name.encode()).hexdigest()}  ./{name}\n" for name in names))
+            f"{publisher.digest(self.path / name)}  ./{name}\n" for name in names))
         return names + ["SHA256SUMS"]
 
     def fake_gh(self, names, draft=True, existing=None, corrupt=False):
@@ -134,6 +155,28 @@ class ReleaseTest(unittest.TestCase):
         with patch.object(publisher, "gh", side_effect=fake), self.assertRaises(ValueError):
             publisher.publish("v1.2.3", self.path)
         self.assertFalse(any(call[1] in ("upload", "edit") for call in calls))
+
+    def test_diagram_archive_bytes_must_match_apk_before_remote_calls(self):
+        names = self.assets()
+        (self.path / names[2]).write_bytes(b"tampered diagram package")
+        with patch.object(publisher, "gh") as gh, self.assertRaises(ValueError):
+            publisher.publish("v1.2.3", self.path)
+        gh.assert_not_called()
+
+    def test_all_downloadable_packages_must_be_in_release_checksums(self):
+        self.assets()
+        sums = self.path / "SHA256SUMS"
+        sums.write_text("\n".join(sums.read_text().splitlines()[:2]) + "\n")
+        with patch.object(publisher, "gh") as gh, self.assertRaises(ValueError):
+            publisher.publish("v1.2.3", self.path)
+        gh.assert_not_called()
+
+    def test_apk_must_exclude_heavy_diagram_assets(self):
+        names = self.assets()
+        with ZipFile(self.path / names[0], "a") as apk:
+            apk.writestr("assets/diagrams/vendor/fonts/accidental.woff2", b"font")
+        with self.assertRaises(ValueError):
+            publisher.diagram_assets(self.path / names[0], self.path)
 
 
 if __name__ == "__main__":

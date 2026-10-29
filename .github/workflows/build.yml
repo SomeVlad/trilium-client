@@ -19,7 +19,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Verify release automation
-        run: python3 -B -m unittest discover -s ci -p 'test_*.py'
+        run: |
+          python3 -B -m unittest discover -s ci -p 'test_*.py'
+          python3 scripts/package-diagrams.py "$RUNNER_TEMP/diagram-packages"
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
@@ -34,6 +36,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import json
           from zipfile import ZipFile
           config = Path('app/build/generated/source/buildConfig/debug/ru/vlad/triliumnotes/BuildConfig.java').read_text()
           assert 'TRILIUM_TOKEN' not in config and 'TRILIUM_BASE_URL' not in config
@@ -41,6 +44,13 @@ jobs:
           assert 'private.properties' not in build
           assert 'trilium.token' not in build and 'trilium.baseUrl' not in build
           with ZipFile('app/build/outputs/apk/debug/app-debug.apk') as apk:
+              manifest = json.loads(apk.read('assets/diagrams/packages.json'))
+              assert manifest == json.loads(Path('app/src/main/assets/diagrams/packages.json').read_text())
+              assert {'mermaid', 'canvas'} == set(manifest['packages'])
+              for path in ('index.html', 'viewer.css', 'vendor/viewer.js'):
+                  assert apk.read('assets/diagrams/' + path)
+              assert not any(name in apk.namelist() for name in ('assets/diagrams/vendor/mermaid.js', 'assets/diagrams/vendor/excalidraw.js'))
+              assert not any(name.startswith('assets/diagrams/vendor/fonts/') for name in apk.namelist())
               entries = [line.split('\t', 1) for line in apk.read('assets/licenses/index.txt').decode().splitlines()]
               assert entries and all(len(entry) == 2 and entry[1] for entry in entries)
               paths = [entry[0] for entry in entries]

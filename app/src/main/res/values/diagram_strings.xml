@@ -1,2 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources><string name="diagram_render_error">Не удалось показать диаграмму</string></resources>
+<resources><string name="diagram_render_error">Не удалось показать диаграмму</string><string name="diagram_downloading">Подготовка диаграммы…</string>
+<string name="diagram_download_failed">Не удалось скачать просмотрщик диаграмм. Проверьте интернет и повторите.</string>
+</resources>

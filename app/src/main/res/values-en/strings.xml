@@ -48,7 +48,7 @@
     <string name="sending_changes_progress">"Sending changes…"</string>
     <string name="changes_send_automatically">"Changes will be sent automatically."</string>
     <string name="send">"Send"</string>
-    <string name="downloading_attachments">"Downloading attachments…"</string>
+    <string name="downloading_attachments">"Downloading resources…"</string>
     <string name="attachment_download_error">"Could not download the attachment. Check your connection and try again."</string>
     <string name="file_save_error">"Could not save the file to the selected location."</string>
     <string name="retry">"Retry"</string>
