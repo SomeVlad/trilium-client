@@ -835,6 +835,8 @@ class NotesViewModel(application: Application,
         mutable.update { it.copy(librarySection = section, query = "", searching = false, results = emptyList(), error = null) }
     }
     fun toggleFavorite(id: String) = preferenceChange { services.libraryPreferences.toggleFavorite(id) }
+    fun togglePin(id: String) = preferenceChange { services.libraryPreferences.togglePinned(id) }
+    fun isPinned(id: String): Boolean = id in libraryPreferences.value.pinned
     fun selectSort(sort: NoteSort) = preferenceChange { services.libraryPreferences.sort(mutable.value.folders.last().id, sort) }
     private fun recordOpened(id: String) { if (id != "root") preferenceChange { services.libraryPreferences.opened(id) } }
     private fun preferenceChange(block: suspend () -> Unit) {

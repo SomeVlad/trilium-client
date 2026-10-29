@@ -165,7 +165,8 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {},
             listState = listState, onCreateFolder = model::createFolder,
             onConnectionSettings = onConnectionSettings,
             preferences = preferences, collectionNotes = model.collectionNotes(), onSection = model::selectSection,
-            onFavorite = model::toggleFavorite, onOrganize = ::startAction, onSort = model::selectSort,
+            onFavorite = model::toggleFavorite, onPin = model::togglePin,
+            onOrganize = ::startAction, onSort = model::selectSort,
             onReorder = model::reorder, onTrashMany = model::trashMany, onTrash = model::openTrash,
             captureCount = captures.size, onCaptures = { dismissedCaptures = emptyList() })
     } else {
@@ -189,6 +190,7 @@ fun NotesApp(model: NotesViewModel, onConnectionSettings: () -> Unit = {},
                 onCancelAttachment = { model.cleanupAttachmentAnchors(document.note.id, null) },
                 onRecoverAttachment = { model.cleanupAttachmentAnchors(document.note.id, it) }, onEditingChanged = { model.setEditing(document.note.id, it) },
                 favorite = document.note.id in preferences.favorites, onFavorite = { model.toggleFavorite(document.note.id) },
+                pinned = document.note.id in preferences.pinned, onPin = { model.togglePin(document.note.id) },
                 onOrganize = { action ->
                     val from = state.folders.last().id.takeIf { parent -> model.sourceParents(document.note).any { it.id == parent } }
                     startAction(action, listOf(document.note), from)
@@ -308,6 +310,7 @@ internal fun LibraryScreen(
     uploadState: AttachmentUploadState = AttachmentUploadState(),
     preferences: LibraryPreferencesState = LibraryPreferencesState(), collectionNotes: List<NoteMeta> = emptyList(),
     onSection: (LibrarySection) -> Unit = {}, onFavorite: ((String) -> Unit)? = null,
+    onPin: ((String) -> Unit)? = null,
     onOrganize: ((LibraryAction, List<NoteMeta>, String?) -> Unit)? = null,
     onSort: (NoteSort) -> Unit = {}, onReorder: ((List<String>) -> Unit)? = null,
     onTrashMany: ((List<NoteMeta>) -> Unit)? = null, onTrash: (() -> Unit)? = null,
@@ -319,11 +322,7 @@ internal fun LibraryScreen(
     val collection = state.librarySection != LibrarySection.NOTES && !searching
     val busy = state.loading || state.searching || state.operationBusy
     val order = preferences.sorts[state.folders.last().id] ?: NoteSort.MANUAL
-    val listed = when (order) {
-        NoteSort.MANUAL -> state.items
-        NoteSort.TITLE -> state.items.sortedWith(compareBy<TreeItem> { it.note.title.lowercase() }.thenBy { it.branchId })
-        NoteSort.MODIFIED -> state.items.sortedWith(compareByDescending<TreeItem> { it.note.modifiedAt.orEmpty() }.thenBy { it.branchId })
-    }
+    val listed = sortTreeItems(state.items, order, preferences.pinned)
     val visibleNotes = if (searching) state.results else if (collection) collectionNotes else listed.map { it.note }
     val hasVisibleItems = visibleNotes.isNotEmpty()
     val inFolder = state.folders.size > 1
@@ -566,6 +565,7 @@ internal fun LibraryScreen(
                         onSelect = { toggleSelected(item.note.id) },
                         onLongSelect = if (onTrashMany != null) ({ dismissKeyboard(); selectionMode = true; toggleSelected(item.note.id) }) else null,
                         favorite = item.note.id in preferences.favorites, onFavorite = onFavorite?.let { { it(item.note.id) } },
+                        pinned = item.note.id in preferences.pinned, onPin = onPin?.let { { it(item.note.id) } },
                         onOrganize = onOrganize?.let { { action -> organize(action, listOf(item.note)) } })
                 }
             }
@@ -577,7 +577,8 @@ internal fun LibraryScreen(
             }
         }
     }
-    if (showReorder) ReorderDialog(state.items, onSave = { showReorder = false; onReorder?.invoke(it) }, onDismiss = { showReorder = false })
+    if (showReorder) ReorderDialog(state.items, onSave = { showReorder = false; onReorder?.invoke(it) },
+        onDismiss = { showReorder = false }, pinned = preferences.pinned)
     if (bulkDelete) AlertDialog(onDismissRequest = { bulkDelete = false },
         title = { Text(AppLanguage.get(context, R.string.library_trash_title)) },
         text = { Text(AppLanguage.get(context, R.string.library_bulk_trash_message, selected.size)) },
@@ -669,6 +670,7 @@ internal fun NoteRow(note: NoteMeta, prefix: String, onOpen: () -> Unit, onFolde
     onDelete: (() -> Unit)? = null, deleteEnabled: Boolean = true,
     selected: Boolean? = null, onSelect: (() -> Unit)? = null, onLongSelect: (() -> Unit)? = null,
     favorite: Boolean = false, onFavorite: (() -> Unit)? = null,
+    pinned: Boolean = false, onPin: (() -> Unit)? = null,
     onOrganize: ((LibraryAction) -> Unit)? = null,
 ) {
     val context = LocalContext.current
@@ -694,16 +696,30 @@ internal fun NoteRow(note: NoteMeta, prefix: String, onOpen: () -> Unit, onFolde
         Spacer(Modifier.width(13.dp))
         Column(Modifier.weight(1f)) {
             val displayTitle = note.title.ifBlank { AppLanguage.get(context, R.string.untitled) }
-            Text(if (prefix.isEmpty()) displayTitle else "$prefix · $displayTitle",
-                style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (prefix.isEmpty()) displayTitle else "$prefix · $displayTitle",
+                    modifier = Modifier.weight(1f, fill = false),
+                    style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (pinned) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Outlined.PushPin, AppLanguage.get(context, R.string.library_pinned),
+                        Modifier.size(16.dp).testTag("note-pinned-${note.id}"), tint = colors.primary)
+                }
+                if (favorite) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Outlined.Star, AppLanguage.get(context, R.string.library_favorite),
+                        Modifier.size(16.dp).testTag("note-favorited-${note.id}"), tint = colors.onSurfaceVariant)
+                }
+            }
             if (folder || note.type != "text" || note.isProtected) {
                 Spacer(Modifier.height(3.dp))
                 Text(if (folder) AppLanguage.get(context, if (note.isProtected) R.string.child_count_protected else R.string.child_count, note.childBranchIds.size) else noteKind(context, note),
                     style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
             }
         }
-        if (selected == null && ((onDelete != null && note.canDelete) || onFavorite != null)) {
-            NoteActionsMenu(note, onDelete, deleteEnabled, favorite = favorite, onFavorite = onFavorite, onOrganize = onOrganize)
+        if (selected == null && ((onDelete != null && note.canDelete) || onFavorite != null || onPin != null)) {
+            NoteActionsMenu(note, onDelete, deleteEnabled, favorite = favorite, onFavorite = onFavorite,
+                pinned = pinned, onPin = onPin, onOrganize = onOrganize)
         } else if (selected == null && folder) Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
             Icon(Icons.Outlined.ChevronRight, null, tint = colors.onSurfaceVariant)
         }
@@ -728,6 +744,7 @@ internal fun EditorScreen(
     onPrepareAttachment: ((() -> Unit, () -> Unit) -> Unit) = { ready, _ -> ready() },
     onCancelAttachment: () -> Unit = {}, onRecoverAttachment: (String?) -> Unit = {},
     favorite: Boolean = false, onFavorite: (() -> Unit)? = null,
+    pinned: Boolean = false, onPin: (() -> Unit)? = null,
     onOrganize: ((LibraryAction) -> Unit)? = null,
     linkCandidates: List<NoteMeta> = emptyList(), onBacklinks: (() -> Unit)? = null,
     onAttachmentManager: (() -> Unit)? = null,
@@ -899,6 +916,9 @@ internal fun EditorScreen(
                         finishEditing(onHistory)
                     }) else null,
                     favorite = favorite, onFavorite = onFavorite,
+                    pinned = pinned, onPin = onPin.takeIf {
+                        !folderContent && document.note.id != "root" && document.note.id != state.folders.last().id
+                    },
                     onOrganize = onOrganize?.let { action -> { kind -> finishEditing { action(kind) } } },
                     onInsertLink = if (canAttach && editing) ({ editorController.saveSelection { saved -> if (saved) showLinkPicker = true } }) else null,
                     onBacklinks = onBacklinks?.let { { finishEditing(it) } },
@@ -993,12 +1013,13 @@ private fun NoteActionsMenu(
     note: NoteMeta, onDelete: (() -> Unit)?, enabled: Boolean = true,
     deleteEnabled: Boolean = true, onSearch: (() -> Unit)? = null, onHistory: (() -> Unit)? = null,
     favorite: Boolean = false, onFavorite: (() -> Unit)? = null,
+    pinned: Boolean = false, onPin: (() -> Unit)? = null,
     onOrganize: ((LibraryAction) -> Unit)? = null, onInsertLink: (() -> Unit)? = null,
     onBacklinks: (() -> Unit)? = null, onAttachments: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val hasDelete = onDelete != null && note.canDelete
-    if (!hasDelete && onSearch == null && onHistory == null && onFavorite == null && onBacklinks == null) return
+    if (!hasDelete && onSearch == null && onHistory == null && onFavorite == null && onPin == null && onBacklinks == null) return
     var expanded by remember(note.id) { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }, enabled = enabled,
@@ -1012,8 +1033,9 @@ private fun NoteActionsMenu(
             if (onHistory != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.history_title)) },
                 leadingIcon = { Icon(Icons.Outlined.History, null) }, modifier = Modifier.testTag("note-history"),
                 onClick = { expanded = false; onHistory() })
+            if (onPin != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, if (pinned) R.string.library_unpin else R.string.library_pin)) },
+                modifier = Modifier.testTag("note-pin"), onClick = { expanded = false; onPin() })
             if (onFavorite != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, if (favorite) R.string.library_favorite_remove else R.string.library_favorite_add)) },
-                leadingIcon = { Icon(if (favorite) Icons.Outlined.Star else Icons.Outlined.StarBorder, null) },
                 modifier = Modifier.testTag("note-favorite"), onClick = { expanded = false; onFavorite() })
             if (onInsertLink != null) DropdownMenuItem(text = { Text(AppLanguage.get(context, R.string.editor_insert_note_link)) },
                 leadingIcon = { Icon(Icons.Outlined.Link, null) }, modifier = Modifier.testTag("note-insert-link"), onClick = { expanded = false; onInsertLink() })

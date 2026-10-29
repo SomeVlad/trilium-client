@@ -310,6 +310,43 @@ class NotesViewModelFeaturesTest {
         assertTrue(model.collectionNotes().isEmpty())
     }
 
+    @Test fun pinIsLocalSurvivesRecreationAndDoesNotChangeFavoritesOrCreateFolderRows() {
+        // Compare the same durable-cache lifecycle on both sides of the pin operation.
+        // The fixture initially contains live API metadata, before its first cache round trip.
+        installModel()
+        val folderJob = NotesViewModel::class.java.getDeclaredField("folderJob").apply { isAccessible = true }
+        await { (folderJob.get(model) as? kotlinx.coroutines.Job)?.isActive != true }
+        val originalRows = model.state.value.items
+        val cached = File(serviceContext.filesDir, "trilium-cache.json").readBytes()
+        val mutations = remote.requests.filterNot { it.startsWith("GET ") }
+        model.toggleFavorite(ALPHA)
+        model.togglePin(BETA)
+        await { model.libraryPreferences.value.favorites == setOf(ALPHA) && model.isPinned(BETA) }
+        installModel()
+        await { (folderJob.get(model) as? kotlinx.coroutines.Job)?.isActive != true }
+
+        assertTrue(model.isPinned(BETA))
+        assertFalse(model.isPinned(ALPHA))
+        assertEquals(originalRows, model.state.value.items)
+        model.selectSection(LibrarySection.FAVORITES)
+        assertEquals(listOf(ALPHA), model.collectionNotes().map { it.id })
+        model.toggleFavorite(BETA)
+        await { model.libraryPreferences.value.favorites == setOf(ALPHA, BETA) }
+        model.togglePin(BETA)
+        await { !model.isPinned(BETA) }
+        assertEquals(setOf(ALPHA, BETA), model.libraryPreferences.value.favorites)
+        assertEquals(0, model.syncState.value.pendingCount)
+        assertEquals(mutations, remote.requests.filterNot { it.startsWith("GET ") })
+        assertArrayEquals(cached, File(serviceContext.filesDir, "trilium-cache.json").readBytes())
+
+        model.togglePin(BETA)
+        await { model.isPinned(BETA) }
+        installModel("account-b", server.url("/another-account/").toString())
+        assertTrue(model.libraryPreferences.value.pinned.isEmpty())
+        installModel()
+        assertEquals(setOf(BETA), model.libraryPreferences.value.pinned)
+    }
+
     @Test fun attachmentMetadataGateDefersReplayWhileEditingThenRefreshesCurrentDocument() {
         model.open(services.repository.cachedMeta(ALPHA)!!)
         model.setEditing(ALPHA, true)

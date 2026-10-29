@@ -19,6 +19,10 @@
     <string name="library_origin">"Откуда переместить"</string>
     <string name="library_favorite_add">"В избранное"</string>
     <string name="library_favorite_remove">"Убрать из избранного"</string>
+    <string name="library_favorite">"В избранном"</string>
+    <string name="library_pin">"Закрепить вверху"</string>
+    <string name="library_unpin">"Открепить"</string>
+    <string name="library_pinned">"Закреплено вверху"</string>
     <string name="library_actions">"Действия со списком"</string>
     <string name="library_note_actions">"Действия с заметкой"</string>
     <string name="library_trash">"Корзина"</string>

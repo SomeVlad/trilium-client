@@ -18,7 +18,27 @@ data class LibraryPreferencesState(
     val favorites: Set<String> = emptySet(),
     val recent: List<String> = emptyList(),
     val sorts: Map<String, NoteSort> = emptyMap(),
+    val pinned: Set<String> = emptySet(),
 )
+
+/** Reorder existing folder rows only; a pin follows the note across its branches. */
+fun sortTreeItems(items: List<TreeItem>, sort: NoteSort, pinned: Set<String> = emptySet()): List<TreeItem> {
+    val ordered = when (sort) {
+        NoteSort.MANUAL -> items
+        NoteSort.TITLE -> items.sortedWith(compareBy<TreeItem> { it.note.title.lowercase() }.thenBy { it.branchId })
+        NoteSort.MODIFIED -> items.sortedWith(compareByDescending<TreeItem> { it.note.modifiedAt.orEmpty() }.thenBy { it.branchId })
+    }
+    return ordered.filter { it.note.id in pinned } + ordered.filterNot { it.note.id in pinned }
+}
+
+/** Persist within-group moves while preserving the original slots hidden by pinned-first display. */
+fun serializeReorderedGroups(original: List<TreeItem>, reordered: List<TreeItem>, pinned: Set<String>): List<String> {
+    val pinnedRows = reordered.filter { it.note.id in pinned }.iterator()
+    val ordinaryRows = reordered.filterNot { it.note.id in pinned }.iterator()
+    return original.map { item ->
+        (if (item.note.id in pinned) pinnedRows.next() else ordinaryRows.next()).branchId
+    }
+}
 
 /** Device preferences scoped to the same server account as the note cache. */
 class LibraryPreferences(context: Context) {
@@ -30,6 +50,9 @@ class LibraryPreferences(context: Context) {
     suspend fun toggleFavorite(id: String) = update {
         it.copy(favorites = if (id in it.favorites) it.favorites - id else it.favorites + id)
     }
+    suspend fun togglePinned(id: String) = update {
+        it.copy(pinned = if (id in it.pinned) it.pinned - id else it.pinned + id)
+    }
     suspend fun opened(id: String) = update { it.copy(recent = (listOf(id) + it.recent.filterNot { old -> old == id }).take(100)) }
     suspend fun sort(folder: String, order: NoteSort) = update { it.copy(sorts = it.sorts + (folder to order)) }
 
@@ -39,6 +62,7 @@ class LibraryPreferences(context: Context) {
             if (next == mutable.value) return@withLock
             val json = JSONObject().put("favorites", JSONArray(next.favorites.toList()))
                 .put("recent", JSONArray(next.recent)).put("sorts", JSONObject(next.sorts.mapValues { it.value.name }))
+                .put("pinned", JSONArray(next.pinned.toList()))
             val output = file.startWrite()
             try { output.write(json.toString().toByteArray()); file.finishWrite(output) }
             catch (error: Exception) { file.failWrite(output); throw error }
@@ -51,6 +75,7 @@ class LibraryPreferences(context: Context) {
         fun strings(key: String) = json.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
         val sorts = json.optJSONObject("sorts") ?: JSONObject()
         LibraryPreferencesState(strings("favorites").toSet(), strings("recent").distinct().take(100),
-            sorts.keys().asSequence().mapNotNull { key -> runCatching { key to NoteSort.valueOf(sorts.getString(key)) }.getOrNull() }.toMap())
+            sorts.keys().asSequence().mapNotNull { key -> runCatching { key to NoteSort.valueOf(sorts.getString(key)) }.getOrNull() }.toMap(),
+            strings("pinned").toSet())
     }.getOrDefault(LibraryPreferencesState())
 }

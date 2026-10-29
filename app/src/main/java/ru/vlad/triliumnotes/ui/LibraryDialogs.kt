@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -21,6 +22,9 @@ import ru.vlad.triliumnotes.R
 import ru.vlad.triliumnotes.data.NoteMeta
 import ru.vlad.triliumnotes.data.TreeItem
 import ru.vlad.triliumnotes.data.TrashItem
+import ru.vlad.triliumnotes.data.NoteSort
+import ru.vlad.triliumnotes.data.serializeReorderedGroups
+import ru.vlad.triliumnotes.data.sortTreeItems
 
 enum class LibraryAction { MOVE, COPY, CLONE }
 data class LibraryActionRequest(val action: LibraryAction, val notes: List<NoteMeta>, val sourceParentId: String?)
@@ -55,11 +59,15 @@ fun DestinationDialog(title: String, destinations: List<NoteDestination>, onPick
 }
 
 @Composable
-fun ReorderDialog(items: List<TreeItem>, onSave: (List<String>) -> Unit, onDismiss: () -> Unit) {
+fun ReorderDialog(items: List<TreeItem>, onSave: (List<String>) -> Unit, onDismiss: () -> Unit,
+    pinned: Set<String> = emptySet(),
+) {
     val context = LocalContext.current
-    var order by remember(items) { mutableStateOf(items) }
+    var order by remember(items, pinned) { mutableStateOf(sortTreeItems(items, NoteSort.MANUAL, pinned)) }
+    fun canMove(index: Int, delta: Int): Boolean = index + delta in order.indices &&
+        (order[index].note.id in pinned) == (order[index + delta].note.id in pinned)
     fun move(index: Int, delta: Int) {
-        if (index + delta !in order.indices) return
+        if (!canMove(index, delta)) return
         order = order.toMutableList().apply { add(index + delta, removeAt(index)) }
     }
     AlertDialog(onDismissRequest = onDismiss, modifier = Modifier.testTag("reorder-dialog"),
@@ -70,16 +78,20 @@ fun ReorderDialog(items: List<TreeItem>, onSave: (List<String>) -> Unit, onDismi
                     val index = order.indexOf(item)
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(item.note.title, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        IconButton(onClick = { move(index, -1) }, enabled = index > 0) {
+                        if (item.note.id in pinned) Icon(Icons.Outlined.PushPin, AppLanguage.get(context, R.string.library_pinned),
+                            Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                        IconButton(onClick = { move(index, -1) }, enabled = canMove(index, -1),
+                            modifier = Modifier.testTag("reorder-up-${item.branchId}")) {
                             Icon(Icons.Outlined.ArrowUpward, AppLanguage.get(context, R.string.library_move_up))
                         }
-                        IconButton(onClick = { move(index, 1) }, enabled = index < order.lastIndex) {
+                        IconButton(onClick = { move(index, 1) }, enabled = canMove(index, 1),
+                            modifier = Modifier.testTag("reorder-down-${item.branchId}")) {
                             Icon(Icons.Outlined.ArrowDownward, AppLanguage.get(context, R.string.library_move_down))
                         }
                     }
                 }
             }
-        }, confirmButton = { TextButton(onClick = { onSave(order.map { it.branchId }) }) { Text(AppLanguage.get(context, R.string.library_save_order)) } },
+        }, confirmButton = { TextButton(onClick = { onSave(serializeReorderedGroups(items, order, pinned)) }) { Text(AppLanguage.get(context, R.string.library_save_order)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(AppLanguage.get(context, R.string.cancel)) } })
 }
 

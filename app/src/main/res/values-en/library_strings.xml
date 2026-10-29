@@ -19,6 +19,10 @@
     <string name="library_origin">"Move from"</string>
     <string name="library_favorite_add">"Add to favorites"</string>
     <string name="library_favorite_remove">"Remove from favorites"</string>
+    <string name="library_favorite">"In favorites"</string>
+    <string name="library_pin">"Pin to top"</string>
+    <string name="library_unpin">"Unpin"</string>
+    <string name="library_pinned">"Pinned to top"</string>
     <string name="library_actions">"List actions"</string>
     <string name="library_note_actions">"Note actions"</string>
     <string name="library_trash">"Trash"</string>
