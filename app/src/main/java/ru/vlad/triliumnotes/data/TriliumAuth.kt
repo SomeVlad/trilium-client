@@ -21,6 +21,8 @@ import java.util.concurrent.TimeUnit
 class InvalidServerUrlException(val messageId: Int) : IllegalArgumentException("Invalid server address")
 class InvalidAuthInputException(val messageId: Int) : IllegalArgumentException("Invalid authentication input")
 class InvalidAuthResponseException : IOException("Server did not return a Trilium authentication token")
+class TotpRequiredException : IOException("Trilium requires a second factor")
+class WrongTotpException : IOException("Trilium rejected the second factor")
 
 /** The token never appears in diagnostics or generated data-class representations. */
 data class TriliumSession(
@@ -65,18 +67,31 @@ class TriliumAuth(
         secret: String,
         useToken: Boolean = false,
         allowInsecureHttp: Boolean = false,
+        totpToken: String? = null,
     ): TriliumSession = withContext(Dispatchers.IO) {
         val normalized = normalizeServerUrl(serverUrl, allowInsecureHttp)
         if (secret.isBlank()) throw InvalidAuthInputException(if (useToken) R.string.msg_token_required else R.string.msg_password_required)
         val token = if (useToken) secret.removePrefix("Bearer ").trim() else {
-            val body = JSONObject().put("password", secret).toString()
+            val payload = JSONObject().put("password", secret)
+            // Omit the field for older servers and ordinary password login. Recovery codes
+            // use this same field and must remain strings rather than six-digit numbers.
+            totpToken?.trim()?.takeIf { it.isNotEmpty() }?.let { payload.put("totpToken", it) }
+            val body = payload.toString()
                 .toRequestBody("application/json; charset=utf-8".toMediaType())
             val request = Request.Builder().url("$normalized/etapi/auth/login").post(body).build()
             client.newCall(request).execute().use { response ->
                 val text = response.body?.string().orEmpty()
                 if (isHtmlInsteadOfJson(response.header("Content-Type"), text))
                     throw UnexpectedHtmlResponseException(response.code)
-                if (!response.isSuccessful) throw ApiException(response.code)
+                if (!response.isSuccessful) {
+                    if (response.code == 401) {
+                        when (runCatching { JSONObject(text).optString("code") }.getOrNull()) {
+                            "TOTP_REQUIRED" -> throw TotpRequiredException()
+                            "WRONG_TOTP" -> throw WrongTotpException()
+                        }
+                    }
+                    throw ApiException(response.code)
+                }
                 val json = runCatching { JSONObject(text) }.getOrElse { throw InvalidAuthResponseException() }
                 json.optString("authToken").takeIf { it.isNotBlank() && it != "null" }
                     ?: throw InvalidAuthResponseException()
@@ -92,6 +107,8 @@ fun authFailureMessage(context: Context, error: Throwable): String {
     fun text(id: Int, vararg args: Any) = AppLanguage.get(context, id, *args)
     return when (error) {
     is InvalidServerUrlException -> text(error.messageId)
+    is TotpRequiredException -> text(R.string.msg_totp_required)
+    is WrongTotpException -> text(R.string.msg_wrong_totp)
     is ApiException -> when (error.status) {
         400, 401 -> text(R.string.msg_invalid_credentials)
         403 -> text(R.string.msg_auth_forbidden)

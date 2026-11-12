@@ -696,7 +696,9 @@ class NotesRepository(private val context: Context, private val api: TriliumApi)
             val body = baseline.pending[id]?.html ?: source.html.orEmpty()
             val markup = if (source.meta.mime.substringBefore(';').trim().endsWith("markdown"))
                 org.commonmark.renderer.html.HtmlRenderer.builder().build().render(org.commonmark.parser.Parser.builder().build().parse(body)) else body
-            org.jsoup.Jsoup.parseBodyFragment(markup).select("[href], [src], [poster]").forEach { element ->
+            org.jsoup.Jsoup.parseBodyFragment(markup).select("[href], [src], [poster], [data-attachment-id]").forEach { element ->
+                if (element.hasAttr("data-attachment-id") && element.attr("data-attachment-id") !in knownAttachmentIds)
+                    throw TreeOperationException(R.string.tree_copy_download_first)
                 listOf("href", "src", "poster").forEach { attribute ->
                     val resource = resolveResourceTarget(element.attr(attribute), api.serverUrl)
                     if (resource?.attachment == true && resource.id !in knownAttachmentIds)

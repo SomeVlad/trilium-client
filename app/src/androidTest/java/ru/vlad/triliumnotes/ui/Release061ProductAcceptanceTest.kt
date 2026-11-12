@@ -115,7 +115,7 @@ class Release061ProductAcceptanceTest {
             if (screen.startsWith("settings")) ConnectionSettingsScreen("https://notes.example.org", 3, false,
                 if (screen == "settings-error") "Не удалось выйти. Сохранённые изменения доступны на телефоне." else null, {}, {})
             else ConnectionScreen(busy = screen == "busy", error = if (screen == "error") "Не удалось подключиться. Проверьте адрес сервера и пароль." else null,
-                storageFailed = screen == "storage", onConnect = { _, _, _, _ -> })
+                storageFailed = screen == "storage", onConnect = { _, _, _, _, _ -> })
         } } }
         save("20-login-empty")
         compose.onNodeWithTag("connection-server").performTextInput("https://notes.example.org")

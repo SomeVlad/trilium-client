@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
                     state.restoring -> Surface { Box(Modifier.fillMaxSize()) }
                     services == null -> ConnectionScreen(state.busy, state.error, state.storageFailed,
                         onResetStorage = connection::disconnect, onConnect = connection::connect,
+                        totpRequired = state.totpRequired, onCredentialsChanged = connection::credentialsChanged,
                         onLanguageSelected = ::selectLanguage)
                     else -> key(services.sessionId ?: services.serverUrl) {
                         val notes = remember { connection.notesModel(services) }

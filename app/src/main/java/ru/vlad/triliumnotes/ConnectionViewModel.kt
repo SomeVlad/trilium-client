@@ -19,6 +19,8 @@ import ru.vlad.triliumnotes.data.TriliumAuth
 import ru.vlad.triliumnotes.data.authFailureMessage
 import ru.vlad.triliumnotes.data.TriliumSession
 import ru.vlad.triliumnotes.data.LegacyImportException
+import ru.vlad.triliumnotes.data.TotpRequiredException
+import ru.vlad.triliumnotes.data.WrongTotpException
 
 data class ConnectionScreenState(
     val restoring: Boolean = true,
@@ -28,6 +30,7 @@ data class ConnectionScreenState(
     val storageFailed: Boolean = false,
     val legacySession: TriliumSession? = null,
     val legacyPendingCount: Int? = null,
+    val totpRequired: Boolean = false,
 )
 
 class ConnectionViewModel(application: Application) : AndroidViewModel(application) {
@@ -83,12 +86,19 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    fun connect(serverUrl: String, secret: String, useToken: Boolean, allowHttp: Boolean) {
+    /** A challenge belongs only to the credentials that produced it. Secrets stay in the form. */
+    fun credentialsChanged() {
+        if (mutable.value.busy) return
+        lastFailure = null
+        mutable.value = mutable.value.copy(totpRequired = false, error = null)
+    }
+
+    fun connect(serverUrl: String, secret: String, useToken: Boolean, allowHttp: Boolean, totpToken: String? = null) {
         if (mutable.value.busy || mutable.value.restoring || mutable.value.storageFailed || mutable.value.legacySession != null) return
         mutable.value = mutable.value.copy(busy = true, error = null)
         viewModelScope.launch {
             try {
-                val session = TriliumAuth().authenticate(serverUrl, secret, useToken, allowHttp)
+                val session = TriliumAuth().authenticate(serverUrl, secret, useToken, allowHttp, totpToken)
                 ensureActive()
                 val legacy = withContext(Dispatchers.IO) { NotesServices.legacyImportAvailable(getApplication()) }
                 if (legacy) {
@@ -102,7 +112,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 mutable.value = ConnectionScreenState(restoring = false, services = services)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                mutable.value = mutable.value.copy(busy = false, error = failureMessage(error))
+                mutable.value = mutable.value.copy(busy = false, error = failureMessage(error),
+                    totpRequired = !useToken && (mutable.value.totpRequired ||
+                        error is TotpRequiredException || error is WrongTotpException))
             }
         }
     }

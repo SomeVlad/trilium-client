@@ -64,7 +64,7 @@ class LanguageSettingsTest {
     @Test fun loginOffersExactlyRussianAndEnglishWithoutSigningIn() {
         var choice: String? = null
         compose.setContent {
-            NotesTheme { ConnectionScreen(onConnect = { _, _, _, _ -> }, onLanguageSelected = { choice = it }) }
+            NotesTheme { ConnectionScreen(onConnect = { _, _, _, _, _ -> }, onLanguageSelected = { choice = it }) }
         }
         compose.onNodeWithTag("language-selector").performScrollTo()
         screenshot("login-row")

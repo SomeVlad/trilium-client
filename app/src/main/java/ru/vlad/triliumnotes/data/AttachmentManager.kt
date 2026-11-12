@@ -18,6 +18,13 @@ import java.io.File
 import java.io.IOException
 
 data class AttachmentManagerState(val pendingCount: Int = 0, val isSyncing: Boolean = false, val error: String? = null)
+class CanvasImageAttachmentException : IOException("Canvas image attachments must be changed in Trilium")
+
+private fun guardCanvasImage(items: List<AttachmentMeta>, attachmentId: String) {
+    if (items.any { it.mime.equals("application/vnd.excalidraw+json", ignoreCase = true) } &&
+        items.any { it.id == attachmentId && (it.role.equals("image", ignoreCase = true) || it.mime.startsWith("image/", ignoreCase = true)) })
+        throw CanvasImageAttachmentException()
+}
 
 /** Account-scoped metadata cache and durable operations; rename never changes binary identity. */
 class AttachmentManager(private val context: Context, private val api: TriliumApi, private val repository: NotesRepository) {
@@ -93,6 +100,8 @@ class AttachmentManager(private val context: Context, private val api: TriliumAp
             require(repository.cachedNote(noteId)?.let { it.note.isEditable && !it.conflict } == true)
             mutex.withLock {
                 require(catalog[noteId].orEmpty().any { it.id == attachmentId && it.ownerId == noteId })
+                // Canvas files address imported images by their title, outside HTML references.
+                guardCanvasImage(catalog[noteId].orEmpty() + repository.cachedAttachments(noteId).orEmpty(), attachmentId)
                 val previous = pending[attachmentId]
                 pending[attachmentId] = Operation(noteId, attachmentId, title)
                 try { save() } catch (error: Throwable) {
@@ -111,6 +120,7 @@ class AttachmentManager(private val context: Context, private val api: TriliumAp
         syncMutex.withLock {
             val operations = mutex.withLock { pending.values.toList() }
             var failed = false
+            var canvasBlocked = false
             mutableState.value = AttachmentManagerState(activeCount(), isSyncing = true, error = storageMessage())
             try {
                 for (op in operations) {
@@ -123,6 +133,12 @@ class AttachmentManager(private val context: Context, private val api: TriliumAp
                             val document = repository.cachedNote(op.noteId) ?: return@replay
                             if (document.remoteMissing) { retain(op); return@replay }
                             if (document.conflict) return@replay
+                            // An offline operation may predate a canvas added by another client.
+                            // Check before editing/syncing references as well as binary metadata.
+                            val beforeEdit = api.getAttachments(op.noteId)
+                            require(beforeEdit.all { it.ownerId == op.noteId })
+                            repository.rememberAttachments(op.noteId, beforeEdit)
+                            guardCanvasImage(beforeEdit, op.attachmentId)
                             repository.rewriteAttachmentReferences(op.noteId, op.attachmentId, op.title)
                             repository.syncPending()
                             if (repository.hasPendingEdits(op.noteId)) return@replay
@@ -131,7 +147,9 @@ class AttachmentManager(private val context: Context, private val api: TriliumAp
                                     synced.note.mime.contains("markdown", true)))
                                 throw IOException("Attachment still has references in the owner note")
                             val remoteCatalog = api.getAttachments(op.noteId)
+                            require(remoteCatalog.all { it.ownerId == op.noteId })
                             repository.rememberAttachments(op.noteId, remoteCatalog)
+                            guardCanvasImage(remoteCatalog, op.attachmentId)
                             val remote = remoteCatalog.firstOrNull { it.id == op.attachmentId }
                             if (remote != null) {
                                 require(remote.ownerId == op.noteId)
@@ -159,12 +177,16 @@ class AttachmentManager(private val context: Context, private val api: TriliumAp
                     } catch (_: AttachmentInsertionDeferred) {
                         // An active editor owns a newer buffer; retry after its normal flush.
                     } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: CanvasImageAttachmentException) { failed = true; canvasBlocked = true }
                     catch (_: Exception) { failed = true }
                 }
             } finally {
                 withContext(NonCancellable) { mutex.withLock {
-                    mutableState.value = AttachmentManagerState(activeCount(), error = storageMessage() ?: if (failed)
-                        AppLanguage.get(context, R.string.editor_attachment_retry) else null)
+                    mutableState.value = AttachmentManagerState(activeCount(), error = storageMessage() ?: when {
+                        canvasBlocked -> AppLanguage.get(context, R.string.msg_canvas_image_attachment_trilium)
+                        failed -> AppLanguage.get(context, R.string.editor_attachment_retry)
+                        else -> null
+                    })
                 } }
             }
             mutex.withLock { activeCount() }

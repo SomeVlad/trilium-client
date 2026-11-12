@@ -6,6 +6,8 @@
     <string name="server_example">"https://notes.example.com"</string>
     <string name="etapi_token">"ETAPI-токен"</string>
     <string name="trilium_password">"Пароль Trilium"</string>
+    <string name="totp_code">Код подтверждения</string>
+    <string name="totp_help">Код из приложения-аутентификатора или код восстановления Trilium.</string>
     <string name="hide">"Скрыть"</string>
     <string name="show">"Показать"</string>
     <string name="token_help">"Создайте токен в Trilium: Настройки → ETAPI."</string>

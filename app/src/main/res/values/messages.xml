@@ -18,6 +18,8 @@
     <string name="msg_url_credentials">Адрес сервера не должен содержать логин или пароль</string>
     <string name="msg_token_required">Введите ETAPI-токен</string>
     <string name="msg_password_required">Введите пароль Trilium</string>
+    <string name="msg_totp_required">Сервер требует код подтверждения. Введите код из приложения-аутентификатора или код восстановления.</string>
+    <string name="msg_wrong_totp">Неверный или уже использованный код. Введите новый код из приложения-аутентификатора или неиспользованный код восстановления.</string>
     <string name="msg_invalid_token">Некорректный ETAPI-токен</string>
     <string name="msg_invalid_credentials">Неверный пароль или ETAPI-токен. Проверьте данные входа.</string>
     <string name="msg_auth_forbidden">Сервер отказал в доступе. Проверьте пароль, токен и правила прокси.</string>
@@ -54,6 +56,7 @@
     <string name="msg_offline_partial">Офлайн-копия обновлена не полностью. Повторим при подключении к интернету.</string>
     <string name="msg_offline_failed">Не удалось обновить офлайн-копию. Повторим при подключении к интернету.</string>
     <string name="msg_attachment_name">Вложение</string>
+    <string name="msg_canvas_image_attachment_trilium">Изображения заметки с рисунком изменяйте в Trilium.</string>
     <string name="msg_local_save_failed">Не удалось сохранить текст на телефоне. Не закрывайте заметку.</string>
     <string name="msg_list_partial">Не удалось обновить часть списка. Уже загруженные заметки доступны.</string>
     <string name="msg_search_unavailable">Поиск сейчас недоступен. Проверьте подключение.</string>

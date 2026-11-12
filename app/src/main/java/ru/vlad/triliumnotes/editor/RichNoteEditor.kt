@@ -358,7 +358,7 @@ object EditorResourcePolicy {
     fun noteId(value: String): String? {
         val fragment = value.substringAfter('#', "")
         val path = when {
-            fragment.startsWith("root/") -> fragment.substringAfterLast('/')
+            fragment.startsWith("root/") -> fragment.substringBefore('?').substringAfterLast('/')
             value.startsWith("/") && !value.startsWith("/api/") -> value.substringBefore('?').substringAfterLast('/')
             else -> return null
         }

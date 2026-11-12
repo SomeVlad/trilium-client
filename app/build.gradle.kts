@@ -138,8 +138,8 @@ android {
         applicationId = "ru.vlad.triliumnotes"
         minSdk = 28
         targetSdk = 36
-        versionCode = 24
-        versionName = "0.6.4"
+        versionCode = 25
+        versionName = "0.6.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
     }

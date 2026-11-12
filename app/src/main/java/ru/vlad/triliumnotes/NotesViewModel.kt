@@ -964,7 +964,8 @@ class NotesViewModel(application: Application,
                 schedulePendingChanges()
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                mutablePanelError.value = text(R.string.msg_library_failed)
+                mutablePanelError.value = if (error is ru.vlad.triliumnotes.data.CanvasImageAttachmentException)
+                    text(R.string.msg_canvas_image_attachment_trilium) else text(R.string.msg_library_failed)
             } finally { mutable.update { it.copy(operationBusy = false) }; syncNow() }
         }
     }

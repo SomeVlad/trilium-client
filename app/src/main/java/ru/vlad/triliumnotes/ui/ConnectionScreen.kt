@@ -37,7 +37,9 @@ fun ConnectionScreen(
     storageFailed: Boolean = false,
     onResetStorage: () -> Unit = {},
     onLanguageSelected: (String) -> Unit = {},
-    onConnect: (String, String, Boolean, Boolean) -> Unit,
+    totpRequired: Boolean = false,
+    onCredentialsChanged: () -> Unit = {},
+    onConnect: (String, String, Boolean, Boolean, String?) -> Unit,
 ) {
     val context = LocalContext.current
     var server by rememberSaveable { mutableStateOf("") }
@@ -46,14 +48,19 @@ fun ConnectionScreen(
     var useToken by rememberSaveable { mutableStateOf(false) }
     var visible by remember { mutableStateOf(false) }
     var allowHttp by rememberSaveable(server) { mutableStateOf(false) }
+    var totpToken by remember(server, secret, useToken, allowHttp, totpRequired) { mutableStateOf("") }
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = LocalFocusManager.current
     val http = server.trim().startsWith("http://", ignoreCase = true)
-    val canConnect = !busy && !storageFailed && server.isNotBlank() && secret.isNotBlank() && (!http || allowHttp)
+    val showTotp = totpRequired && !useToken
+    val canConnect = !busy && !storageFailed && server.isNotBlank() && secret.isNotBlank() &&
+        (!http || allowHttp) && (!showTotp || totpToken.isNotBlank())
     fun submit() {
         if (canConnect) {
             keyboard?.hide(); focus.clearFocus()
-            onConnect(server, secret, useToken, allowHttp)
+            onConnect(server, secret, useToken, allowHttp, totpToken.takeIf { showTotp })
+            // Each retry needs a fresh code. Never retain a consumed recovery/TOTP code.
+            totpToken = ""
         }
     }
     Surface(Modifier.fillMaxSize()) {
@@ -66,33 +73,45 @@ fun ConnectionScreen(
                 Text(AppLanguage.get(context, R.string.connect_intro), style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(32.dp))
-                OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth().testTag("connection-server"),
+                OutlinedTextField(server, { server = it; onCredentialsChanged() }, Modifier.fillMaxWidth().testTag("connection-server"),
                     label = { Text(AppLanguage.get(context, R.string.server_address)) }, placeholder = { Text(AppLanguage.get(context, R.string.server_example)) },
                     singleLine = true, enabled = !busy && !storageFailed,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next))
                 Spacer(Modifier.height(16.dp))
-                OutlinedTextField(secret, { secret = it }, Modifier.fillMaxWidth().testTag("connection-secret"),
+                OutlinedTextField(secret, { secret = it; onCredentialsChanged() }, Modifier.fillMaxWidth().testTag("connection-secret"),
                     label = { Text(if (useToken) AppLanguage.get(context, R.string.etapi_token) else AppLanguage.get(context, R.string.trilium_password)) }, singleLine = true,
                     enabled = !busy && !storageFailed,
                     visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password,
+                        imeAction = if (showTotp) ImeAction.Next else ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { submit() }),
                     trailingIcon = { IconButton(onClick = { visible = !visible }) {
                         Icon(if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
                             if (visible) AppLanguage.get(context, R.string.hide) else AppLanguage.get(context, R.string.show))
                     } })
+                if (showTotp) {
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(totpToken, { totpToken = it },
+                        Modifier.fillMaxWidth().testTag("connection-totp"),
+                        label = { Text(AppLanguage.get(context, R.string.totp_code)) },
+                        supportingText = { Text(AppLanguage.get(context, R.string.totp_help)) },
+                        singleLine = true, enabled = !busy && !storageFailed,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { submit() }))
+                }
                 if (useToken) {
                     Spacer(Modifier.height(8.dp))
                     Text(AppLanguage.get(context, R.string.token_help),
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                TextButton(onClick = { useToken = !useToken; secret = ""; visible = false }, enabled = !busy && !storageFailed,
+                TextButton(onClick = { useToken = !useToken; secret = ""; visible = false; onCredentialsChanged() }, enabled = !busy && !storageFailed,
                     modifier = Modifier.testTag("connection-mode")) {
                     Text(if (useToken) AppLanguage.get(context, R.string.use_password) else AppLanguage.get(context, R.string.use_token))
                 }
                 if (http) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(allowHttp, { allowHttp = it }, enabled = !busy)
+                        Checkbox(allowHttp, { allowHttp = it; onCredentialsChanged() }, enabled = !busy)
                         Text(AppLanguage.get(context, R.string.allow_http), style = MaterialTheme.typography.bodyMedium)
                     }
                 }

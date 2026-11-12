@@ -45,6 +45,15 @@ class NoteResourcesTest {
             resolveResourceTarget("/api/images/noteAAAA/picture.png", "https://notes.example"))
     }
 
+    @Test fun trilium107AttachmentFragmentUsesPrivateResourceWithoutAcceptingExternalFragments() {
+        val fragment = "#root/ownerAAAA?viewMode=attachments&attachmentId=attachAAAA"
+        assertEquals(ResourceTarget("attachAAAA", true), resolveResourceTarget(fragment, "https://notes.example"))
+        assertNull(resolveResourceTarget("https://evil.example/$fragment", "https://notes.example"))
+        assertNull(resolveResourceTarget("#root/ownerAAAA?block=attachAAAA", "https://notes.example"))
+        assertNull(resolveResourceTarget("$fragment&attachmentId=otherAAA", "https://notes.example"))
+        assertNull(resolveResourceTarget("#root/../ownerAAAA?attachmentId=attachAAAA", "https://notes.example"))
+    }
+
     @Test fun uploadedAttachmentSurvivesOutboxRemovalAndRestartWithoutAnyDownload() = runBlocking {
         var networkCalls = 0
         val disconnected = OkHttpClient.Builder().addInterceptor {

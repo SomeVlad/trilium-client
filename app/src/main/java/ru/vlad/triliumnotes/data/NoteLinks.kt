@@ -4,16 +4,21 @@ import org.jsoup.Jsoup
 
 /** Only note fragments are internal links; external URLs must never become cached backlinks. */
 fun linkedNoteIds(content: String, markdown: Boolean = false): Set<String> {
-    val source = if (markdown) content.replace(Regex("(?m)^(`{3,}|~{3,})[^\\n]*\\n[\\s\\S]*?^\\1[^\\n]*$"), "")
-        .replace(Regex("`+[^`\\n]*`+"), "") else content
-    val links = Jsoup.parseBodyFragment(source).select("a[href]").map { it.attr("href") }.toMutableList()
+    val source = (if (markdown) content.replace(Regex("(?m)^ {0,3}(`{3,}|~{3,})[^\\n]*\\n[\\s\\S]*?^ {0,3}\\1[^\\n]*$"), "")
+        .replace(Regex("`+[^`\\n]*`+"), "") else content)
+        .replace(Regex("<(pre|code|script|style)\\b[^>]*>[\\s\\S]*?</\\1\\s*>", RegexOption.IGNORE_CASE), "")
+    val document = Jsoup.parseBodyFragment(source)
+    document.select("pre, code, script, style").remove()
+    val links = document.select("a[href]").map { it.attr("href") }.toMutableList()
     if (markdown) Regex("!?\\[(?:\\\\.|[^\\]\\n])*]\\(<?([^\\s)>]+)>?(?:\\s+[^)]*)?\\)").findAll(source)
         .forEach { links += it.groupValues[1] }
-    return links.mapNotNull { value ->
-        if (!value.startsWith("#root/")) null else value.substringAfterLast('/').takeIf {
+    val includes = document.select("[data-note-id]").map { it.attr("data-note-id") }
+        .filter { it == "root" || it.matches(Regex("[A-Za-z0-9_]{4,32}")) }
+    return (includes + links.mapNotNull { value ->
+        if (!value.startsWith("#root/")) null else value.substringBefore('?').substringAfterLast('/').takeIf {
             it == "root" || it.matches(Regex("[A-Za-z0-9_]{4,32}"))
         }
-    }.toSet()
+    }).toSet()
 }
 
 /** Call with repository.cachedVisibleDocuments(); protected/hidden/deleted content never enters the index. */
@@ -46,8 +51,18 @@ fun containsAttachmentReference(content: String, attachmentId: String, markdown:
     require(attachmentId.matches(Regex("[A-Za-z0-9_]{4,32}")))
     val source = if (markdown) content.replace(Regex("(?m)^ {0,3}(`{3,}|~{3,})[^\\n]*\\n[\\s\\S]*?^ {0,3}\\1[^\\n]*$"), "")
         .replace(Regex("`+[^`\\n]*`+"), "") else content
-    return Regex("(?:api/attachments/(?:[A-Za-z0-9_]{4,32}/)?|etapi/attachments/|attachments/)${Regex.escape(attachmentId)}(?:/|[?\\s\"'<>)]|$)")
-        .containsMatchIn(source)
+    if (Regex("(?:api/attachments/(?:[A-Za-z0-9_]{4,32}/)?|etapi/attachments/|attachments/)${Regex.escape(attachmentId)}(?:/|[?\\s\"'<>)]|$)")
+        .containsMatchIn(source)) return true
+    val document = Jsoup.parseBodyFragment(source)
+    if (document.select("[data-attachment-id]").any { it.attr("data-attachment-id") == attachmentId }) return true
+    val links = document.select("[href], [src]").flatMap { listOf(it.attr("href"), it.attr("src")) }.toMutableList()
+    if (markdown) Regex("!?\\[(?:\\\\.|[^\\]\\n])*]\\(<?([^\\s)>]+)>?(?:\\s+[^)]*)?\\)").findAll(source)
+        .forEach { links += org.jsoup.parser.Parser.unescapeEntities(it.groupValues[1], false) }
+    return links.any { value ->
+        value.startsWith("#root/") && value.substringAfter('?', "").split('&').any { parameter ->
+            parameter.substringBefore('=') == "attachmentId" && parameter.substringAfter('=', "") == attachmentId
+        }
+    }
 }
 
 /** Source-preserving replacement: attachment URLs/IDs and all unrelated markup stay byte-for-byte intact. */

@@ -284,14 +284,33 @@ class TreeOperationsRepositoryTest {
         assertEquals(0, fake.creates)
     }
 
+    @Test fun trilium107EmbedsAndAttachmentFragmentsRequireAnUpToDateCatalogBeforeCopy() = runBlocking {
+        val repository = NotesRepository(context, api())
+        hydrate(repository)
+        for (body in listOf(
+            "<figure class='include-note' data-attachment-id='newAttAA' data-box-size='full'></figure>",
+            "<a href='#root/childAAA?viewMode=attachments&amp;attachmentId=newAttAA'>Drawing</a>",
+        )) {
+            repository.saveDraft("childAAA", "Child", body)
+            val before = repository.syncState.value.pendingCount
+            try { repository.copySubtree("childAAA", "targetAA"); fail("Uncached v107 attachment cannot remain shared") }
+            catch (_: TreeOperationException) { }
+            assertEquals(before, repository.syncState.value.pendingCount)
+            assertEquals(0, fake.creates)
+            assertEquals(body, repository.cachedNote("childAAA")!!.html)
+        }
+    }
+
     @Test fun nativeReferenceRemappingLeavesExternalSitesAndProseUntouched() {
         val content = "<a href=\"#root/folderAA/childAAA\">childAAA</a>" +
             "<section data-note-id=\"childAAA\"></section>" +
+            "<section data-attachment-id=\"attachAA\"></section>" +
             "<img src=\"https://elsewhere.example/api/images/childAAA/p.png\">"
-        val copied = remapTreeReferences(content, mapOf("folderAA" to "newFolAA", "childAAA" to "newChild"), server.url("/").toString())
+        val copied = remapTreeReferences(content, mapOf("folderAA" to "newFolAA", "childAAA" to "newChild", "attachAA" to "newAttAA"), server.url("/").toString())
         assertTrue(copied.contains("#root/newFolAA/newChild"))
         assertTrue(copied.contains(">childAAA</a>"))
         assertTrue(copied.contains("data-note-id=\"newChild\""))
+        assertTrue(copied.contains("data-attachment-id=\"newAttAA\""))
         assertTrue(copied.contains("https://elsewhere.example/api/images/childAAA/p.png"))
     }
 

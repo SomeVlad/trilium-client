@@ -16,6 +16,8 @@ class EditorResourcePolicyTest {
     }
     @Test fun referencesOnlyYieldValidNoteIds() {
         assertEquals("target", EditorResourcePolicy.noteId("#root/folder/target"))
+        assertEquals("target", EditorResourcePolicy.noteId("#root/folder/target?block=heading/blockAAAA"))
+        assertEquals("target", EditorResourcePolicy.noteId("#root/target?viewMode=attachments&attachmentId=attachAA"))
         assertNull(EditorResourcePolicy.noteId("#target"))
         assertNull(EditorResourcePolicy.noteId("javascript:alert(1)"))
         assertNull(EditorResourcePolicy.noteId("https://example.org"))

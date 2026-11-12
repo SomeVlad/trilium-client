@@ -39,6 +39,10 @@ body:not(.editing) .ck-editor__top, body:not(.body-focus) .ck-editor__top { disp
 .ck-content td,.ck-content th { border:1px solid var(--border); padding:8px; min-width:50px; }.ck-content th { background:var(--surface); }
 .ck-content hr { border:0; border-top:1px solid var(--border); margin:1.4em 0; }
 .ck-content span[data-pocket-preserved] { display:inline-block; color:var(--muted); background:var(--surface); border:1px dashed var(--border); border-radius:6px; padding:0 6px; font-size:.8em; }
+.ck-content .include-note { display:block; padding:14px; margin:1em 0; border:1px solid var(--border); border-radius:6px; background:var(--surface); cursor:pointer; }
+.ck-content .include-note::before { content:var(--includedNote); display:block; color:var(--accent); text-decoration:underline; }
+.ck-content .include-note[data-block]::before { content:var(--includedExcerpt); }
+.ck-content .include-note[data-attachment-id]::before { content:var(--attachment); }
 #fallback { width:100%; min-height:60vh; background:var(--background); color:var(--foreground); border:1px solid var(--border); font:14px/1.6 monospace; }
 
 .ck-content [data-url]:empty,.ck-content oembed[url] { display:block; border:1px solid var(--border); background:var(--surface); border-radius:12px; padding:14px; cursor:pointer; }

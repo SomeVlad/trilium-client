@@ -74,6 +74,11 @@ data class BinaryFile(val file: File, val mimeType: String)
 
 internal const val MAX_INLINE_RESOURCE_BYTES = 20 * 1024 * 1024
 
+// Trilium 0.107 moved these built-in pages from individual HTML files to its catalog.
+private val CATALOG_DOC_NAMES = setOf("hidden", "launchbar_command_launcher", "launchbar_history_navigation",
+    "launchbar_intro", "launchbar_note_launcher", "launchbar_quick_search", "launchbar_script_launcher",
+    "launchbar_spacer", "launchbar_widget_launcher", "share", "system_state", "task_state", "task_states", "user_hidden")
+
 /** Used only by APIs whose caller explicitly needs an in-memory image. */
 internal fun InputStream.readResourceBytes(): ByteArray {
     val result = ByteArrayOutputStream()
@@ -153,12 +158,32 @@ class TriliumApi(
             docName.split('/').none { it.isEmpty() || it.all { char -> char == '.' } })
         val version = JSONObject(send("GET", endpoint("app-info"))).getString("appVersion")
         require(version.matches(Regex("[A-Za-z0-9.\\-]+")))
-        val url = serverRoot.newBuilder().addPathSegment("assets").addPathSegment("v$version")
-            .addPathSegment("doc_notes").addPathSegment("en").apply {
+        val release = Regex("(\\d+)\\.(\\d+)\\.\\d+(?:-[A-Za-z0-9.-]+)?").matchEntire(version)
+            ?: throw IOException("Invalid Trilium documentation version")
+        val major = release.groupValues[1].toIntOrNull() ?: throw IOException("Invalid Trilium documentation version")
+        val minor = release.groupValues[2].toIntOrNull() ?: throw IOException("Invalid Trilium documentation version")
+        val assets = serverRoot.newBuilder().addPathSegment("assets").addPathSegment("v$version")
+        val url: HttpUrl
+        val html: String
+        if (major > 0 || minor >= 107) {
+            if (docName !in CATALOG_DOC_NAMES) throw IOException("Unknown Trilium documentation page")
+            url = assets.addPathSegment("translations").addPathSegment("en").addPathSegment("translation.json").build()
+            val catalog = try { JSONObject(send("GET", url)) }
+                catch (error: org.json.JSONException) { throw IOException("Invalid Trilium documentation catalog", error) }
+            val page = (catalog.optJSONObject("doc_notes")?.opt(docName) as? String)?.takeIf { it.isNotBlank() }
+                ?: throw IOException("Trilium documentation page is missing")
+            // The web client supplies its own script/widget samples. Show the limitation
+            // explicitly rather than copying its rendering/runtime implementation here.
+            html = if (docName in setOf("launchbar_script_launcher", "launchbar_widget_launcher"))
+                page.replace(Regex("\\{\\{\\s*sample\\s*}}"),
+                    "// Open this page in the Trilium web client for the full code example.") else page
+        } else {
+            url = assets.addPathSegment("doc_notes").addPathSegment("en").apply {
                 val parts = docName.split('/')
                 parts.forEachIndexed { index, part -> addPathSegment(if (index == parts.lastIndex) "$part.html" else part) }
             }.build()
-        val html = send("GET", url, allowsHtmlBody = true)
+            html = send("GET", url, allowsHtmlBody = true)
+        }
         val document = Jsoup.parse(html)
         document.select("[src], [href]").forEach { element ->
             for (attribute in listOf("src", "href")) {
@@ -439,10 +464,10 @@ internal fun parseNote(json: JSONObject): NoteMeta {
     val childBranches = json.optJSONArray("childBranchIds")
     val parents = json.optJSONArray("parentNoteIds")
     val attributes = json.optJSONArray("attributes")
-    val docName = json.optString("docName").takeIf { it.isNotBlank() } ?: attributes?.let { items ->
+    val docName = (json.opt("docName") as? String)?.takeIf { it.isNotBlank() && it != "null" } ?: attributes?.let { items ->
         (0 until items.length()).map { items.getJSONObject(it) }
             .firstOrNull { it.optString("type") == "label" && it.optString("name") == "docName" }
-            ?.optString("value")?.takeIf { it.isNotBlank() }
+            ?.opt("value").let { it as? String }?.takeIf { it.isNotBlank() && it != "null" }
     }
     return NoteMeta(
         id = json.getString("noteId"),

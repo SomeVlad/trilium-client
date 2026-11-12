@@ -33,13 +33,16 @@ class AttachmentManagerTest {
     private var requestCheck: (() -> Unit)? = null
     private var deleteCount = 0
     private var title = "photo.png"
+    private var attachmentRole = "image"
+    private var attachmentMime = "image/png"
+    private var hasCanvas = false
     private var content = "<p>Before<img src='api/attachments/ownerAAA/attachAA/photo.png'>After</p>"
 
     private fun note() = JSONObject().put("noteId", "ownerAAA").put("title", "Note").put("type", "text")
         .put("mime", "text/html").put("isProtected", false).put("blobId", "blobAAAA")
         .put("childBranchIds", JSONArray()).put("parentNoteIds", JSONArray(listOf("root")))
     private fun attachment() = JSONObject().put("attachmentId", "attachAA").put("ownerId", "ownerAAA")
-        .put("title", title).put("role", "image").put("mime", "image/png").put("position", 0)
+        .put("title", title).put("role", attachmentRole).put("mime", attachmentMime).put("position", 0)
 
     @Before fun setup() {
         directory = Files.createTempDirectory("attachment-manager-test").toFile()
@@ -56,7 +59,11 @@ class AttachmentManagerTest {
                 }
                 if (path == "/etapi/notes/ownerAAA/attachments") {
                     if (failCatalog) return MockResponse().setResponseCode(503)
-                    return MockResponse().setBody((if (deleted) JSONArray() else JSONArray().put(attachment())).toString())
+                    val items = if (deleted) JSONArray() else JSONArray().put(attachment())
+                    if (hasCanvas) items.put(JSONObject().put("attachmentId", "canvasAA").put("ownerId", "ownerAAA")
+                        .put("title", "drawing.excalidraw").put("role", "canvas")
+                        .put("mime", "application/vnd.excalidraw+json").put("position", 1))
+                    return MockResponse().setBody(items.toString())
                 }
                 if (path == "/etapi/attachments/attachAA") {
                     if (request.method == "DELETE") {
@@ -107,6 +114,84 @@ class AttachmentManagerTest {
         assertEquals(0, deleteCount)
         assertTrue(content.contains("api/attachments/ownerAAA/attachAA/photo.png"))
         assertTrue(content.contains("alt=\"New photo.png\""))
+    }
+
+    @Test fun canvasImageRenameAndDeleteAreRejectedBeforeQueueOrDraftChanges() = runBlocking {
+        hasCanvas = true
+        val manager = AttachmentManager(context, api, repository)
+        val originalContent = repository.cachedNote("ownerAAA")!!.html
+        for ((role, mime) in listOf("image" to "application/octet-stream", "file" to "image/jpeg")) {
+            attachmentRole = role
+            attachmentMime = mime
+            manager.list("ownerAAA")
+            val queueFile = File(directory, "attachment-manager.json")
+            val before = queueFile.readBytes()
+            val requests = server.requestCount
+            try { manager.rename("ownerAAA", "attachAA", "New image title"); fail("Canvas image rename must be rejected") }
+            catch (_: CanvasImageAttachmentException) { }
+            try { manager.delete("ownerAAA", "attachAA"); fail("Canvas image delete must be rejected") }
+            catch (_: CanvasImageAttachmentException) { }
+            assertEquals(0, manager.state.value.pendingCount)
+            assertEquals(0, manager.pendingCount())
+            assertEquals(0, repository.syncState.value.pendingCount)
+            assertEquals(originalContent, repository.cachedNote("ownerAAA")!!.html)
+            assertEquals(originalContent, content)
+            assertArrayEquals(before, queueFile.readBytes())
+            assertEquals(requests, server.requestCount)
+        }
+        assertEquals(0, patchCount)
+        assertEquals(0, deleteCount)
+    }
+
+    @Test fun newlyAddedCanvasBlocksOlderQueuedRenameAcrossRestart() = runBlocking {
+        verifyNewCanvasBlocksQueuedOperation(delete = false)
+    }
+
+    @Test fun newlyAddedCanvasBlocksOlderQueuedDeleteAcrossRestart() = runBlocking {
+        verifyNewCanvasBlocksQueuedOperation(delete = true)
+    }
+
+    private suspend fun verifyNewCanvasBlocksQueuedOperation(delete: Boolean) {
+        val manager = AttachmentManager(context, api, repository)
+        manager.list("ownerAAA")
+        val remoteBefore = content
+        if (delete) manager.delete("ownerAAA", "attachAA")
+        else manager.rename("ownerAAA", "attachAA", "Queued title.png")
+        val draftBefore = repository.cachedNote("ownerAAA")!!.html
+        hasCanvas = true
+        repeat(2) {
+            val reopenedRepository = NotesRepository(context, api)
+            val restarted = AttachmentManager(context, api, reopenedRepository)
+            assertEquals(1, restarted.state.value.pendingCount)
+            val requestsBefore = server.requestCount
+            assertEquals(1, restarted.syncPending())
+            assertEquals(remoteBefore, content)
+            assertEquals(draftBefore, reopenedRepository.cachedNote("ownerAAA")!!.html)
+            assertEquals(1, restarted.state.value.pendingCount)
+            assertEquals(ru.vlad.triliumnotes.AppLanguage.get(context,
+                ru.vlad.triliumnotes.R.string.msg_canvas_image_attachment_trilium), restarted.state.value.error)
+            assertEquals(0, patchCount)
+            assertEquals(0, deleteCount)
+            // Only a fresh catalog read is needed; even the note's content PUT is deferred.
+            assertEquals(requestsBefore + 1, server.requestCount)
+            try { restarted.rename("ownerAAA", "attachAA", "Still unsafe.png"); fail("Fresh cached canvas must also guard enqueue") }
+            catch (_: CanvasImageAttachmentException) { }
+            assertEquals(draftBefore, reopenedRepository.cachedNote("ownerAAA")!!.html)
+            assertEquals(1, restarted.state.value.pendingCount)
+        }
+    }
+
+    @Test fun canvasDoesNotBlockUnrelatedNonImageAttachmentRename() = runBlocking {
+        hasCanvas = true
+        attachmentRole = "file"
+        attachmentMime = "application/pdf"
+        val manager = AttachmentManager(context, api, repository)
+        manager.list("ownerAAA")
+        manager.rename("ownerAAA", "attachAA", "Report.pdf")
+        assertEquals(0, manager.syncPending())
+        assertEquals("Report.pdf", title)
+        assertEquals(1, patchCount)
+        assertEquals(0, deleteCount)
     }
 
     @Test fun conflictedReferenceEditNeverDeletesRemoteAttachment() = runBlocking {
@@ -219,6 +304,36 @@ class AttachmentManagerTest {
         repository.saveDraft("ownerAAA", "Note", "<p>Video removed</p>")
         assertEquals(0, manager.syncPending())
         assertEquals(1, deleteCount)
+    }
+
+    @Test fun nativeAttachmentEmbedsAndQueryLinksDeferDeletionAcrossRestartUntilExplicitRemoval() = runBlocking {
+        val source = "<section class='attachment' data-attachment-id='attachAA'><p>Native embed</p></section>" +
+            "<a href='#root/ownerAAA?viewMode=attachments&amp;attachmentId=attachAA'>Open attachment</a>"
+        repository.saveDraft("ownerAAA", "Note", source)
+        val manager = AttachmentManager(context, api, repository)
+        manager.list("ownerAAA")
+        manager.delete("ownerAAA", "attachAA")
+        assertEquals(source, repository.cachedNote("ownerAAA")!!.html)
+        assertEquals(1, manager.syncPending())
+        assertEquals(source, content)
+        assertEquals(0, deleteCount)
+        val reopenedRepository = NotesRepository(context, api)
+        val restarted = AttachmentManager(context, api, reopenedRepository)
+        assertEquals(1, restarted.state.value.pendingCount)
+        assertEquals(1, restarted.syncPending())
+        assertEquals(source, reopenedRepository.cachedNote("ownerAAA")!!.html)
+        assertEquals(source, content)
+        assertEquals(0, deleteCount)
+        // Removing only one reference must still leave the binary available.
+        val queryOnly = source.substringAfter("</section>")
+        reopenedRepository.saveDraft("ownerAAA", "Note", queryOnly)
+        assertEquals(1, restarted.syncPending())
+        assertEquals(queryOnly, content)
+        assertEquals(0, deleteCount)
+        reopenedRepository.saveDraft("ownerAAA", "Note", "<p>Attachment block and link removed</p>")
+        assertEquals(0, restarted.syncPending())
+        assertEquals(1, deleteCount)
+        assertEquals(0, restarted.state.value.pendingCount)
     }
 
 

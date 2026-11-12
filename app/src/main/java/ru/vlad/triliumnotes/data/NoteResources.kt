@@ -31,6 +31,16 @@ internal data class ResourceTarget(val id: String, val attachment: Boolean) {
 
 /** Only a Trilium note/attachment endpoint may receive the private server credential. */
 internal fun resolveResourceTarget(value: String, serverUrl: String): ResourceTarget? {
+    // v0.107 attachment links are note-view fragments, not binary endpoint URLs.
+    // Accept only relative native fragments; an external site's fragment is never a private resource.
+    if (value.startsWith("#root/")) {
+        val path = value.substringBefore('?').removePrefix("#root/")
+        if (!path.split('/').all { it.matches(Regex("[A-Za-z0-9_]{4,32}")) }) return null
+        val parameters = value.substringAfter('?', "").split('&').map { it.substringBefore('=') to it.substringAfter('=', "") }
+        if (parameters.count { it.first == "attachmentId" } != 1) return null
+        val id = parameters.single { it.first == "attachmentId" }.second
+        return id.takeIf { it.matches(Regex("[A-Za-z0-9_]{4,32}")) }?.let { ResourceTarget(it, true) }
+    }
     val uri = runCatching { URI(value.trim()) }.getOrNull() ?: return null
     if (uri.userInfo != null || uri.fragment != null) return null
     if (uri.isAbsolute || uri.rawAuthority != null) {
@@ -145,6 +155,10 @@ class NoteResources(
             .render(org.commonmark.parser.Parser.builder().build().parse(body)) else body
         val document = org.jsoup.Jsoup.parseBodyFragment(html)
         val paths = linkedSetOf<String>()
+        document.select("[data-attachment-id]").forEach { element ->
+            val id = element.attr("data-attachment-id")
+            if (id.matches(Regex("[A-Za-z0-9_]{4,32}"))) paths += "api/attachments/$id/download"
+        }
         document.select("[src], [poster], a[href]").forEach { element ->
             for (attribute in listOf("src", "poster", "href")) {
                 val path = element.attr(attribute)

@@ -40,11 +40,72 @@ class TriliumAuthTest {
 
     @Test fun existingTokenDoesNotCreateNewToken() = runBlocking {
         validValidation()
-        val session = TriliumAuth().authenticate(server.url("/").toString(), "Bearer existing-token", useToken = true, allowInsecureHttp = true)
+        val session = TriliumAuth().authenticate(server.url("/").toString(), "Bearer existing-token", useToken = true,
+            allowInsecureHttp = true, totpToken = "ignored-code")
         assertFalse(session.passwordLogin)
         assertEquals("/etapi/app-info", server.takeRequest().path)
         assertEquals("existing-token", server.takeRequest().getHeader("Authorization"))
         assertEquals(2, server.requestCount)
+    }
+
+    @Test fun totpChallengeDoesNotValidateOrExposeASecret() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(401)
+            .setBody("""{"status":401,"code":"TOTP_REQUIRED","message":"synthetic-server-secret"}"""))
+        try {
+            TriliumAuth().authenticate(server.url("/").toString(), "synthetic-password", allowInsecureHttp = true)
+            fail("Expected TOTP challenge")
+        } catch (error: TotpRequiredException) {
+            assertFalse(error.toString().contains("synthetic"))
+            assertFalse(authFailureMessage(org.robolectric.RuntimeEnvironment.getApplication(), error).contains("synthetic"))
+        }
+        assertFalse(JSONObject(server.takeRequest().body.readUtf8()).has("totpToken"))
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test fun passwordAndTotpOrRecoveryCodeAreSubmittedTogether() = runBlocking {
+        for (code in listOf("012345", "AAAAAAAAAAAAAAAAAAAAAA==")) {
+            server.enqueue(MockResponse().setResponseCode(201).setBody("""{"authToken":"generated-token"}"""))
+            validValidation()
+            TriliumAuth().authenticate(server.url("/").toString(), "password", allowInsecureHttp = true,
+                totpToken = " $code ")
+            val payload = JSONObject(server.takeRequest().body.readUtf8())
+            assertEquals("password", payload.getString("password"))
+            assertEquals(code, payload.getString("totpToken"))
+            server.takeRequest(); server.takeRequest()
+        }
+        assertEquals(6, server.requestCount)
+    }
+
+    @Test fun wrongTotpHasItsOwnFailureAndCanBeRetried() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"code":"WRONG_TOTP"}"""))
+        try {
+            TriliumAuth().authenticate(server.url("/").toString(), "password", allowInsecureHttp = true,
+                totpToken = "000000")
+            fail("Expected rejected second factor")
+        } catch (error: WrongTotpException) {
+            assertFalse(error.toString().contains("000000"))
+        }
+        assertEquals(1, server.requestCount)
+        server.takeRequest()
+        server.enqueue(MockResponse().setResponseCode(201).setBody("""{"authToken":"retry-token"}"""))
+        validValidation()
+        val session = TriliumAuth().authenticate(server.url("/").toString(), "password", allowInsecureHttp = true,
+            totpToken = "123456")
+        assertEquals("retry-token", session.token)
+        assertEquals("123456", JSONObject(server.takeRequest().body.readUtf8()).getString("totpToken"))
+    }
+
+    @Test fun onlyExplicitLogin401ErrorsRequestTotp() = runBlocking {
+        for ((status, body) in listOf(401 to """{"code":"WRONG_PASSWORD"}""",
+            401 to """{"code":"UNKNOWN"}""", 401 to "not-json",
+            500 to """{"code":"TOTP_REQUIRED"}""")) {
+            server.enqueue(MockResponse().setResponseCode(status).setBody(body))
+            try {
+                TriliumAuth().authenticate(server.url("/").toString(), "password", allowInsecureHttp = true)
+                fail("Expected HTTP failure")
+            } catch (error: ApiException) { assertEquals(status, error.status) }
+        }
+        assertEquals(4, server.requestCount)
     }
 
     @Test fun badPasswordReturnsTypedFailureWithoutExtraRequests() = runBlocking {

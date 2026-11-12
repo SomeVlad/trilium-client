@@ -1,7 +1,9 @@
 package ru.vlad.triliumnotes.ui
 
+import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -16,20 +18,26 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import ru.vlad.triliumnotes.AppLanguage
 import ru.vlad.triliumnotes.Folder
+import ru.vlad.triliumnotes.R
 import ru.vlad.triliumnotes.NotesScreenState
 import ru.vlad.triliumnotes.data.NoteMeta
 import ru.vlad.triliumnotes.data.SyncState
@@ -44,7 +52,7 @@ class ConnectionScreenTest {
     @Test fun passwordSubmissionUsesPasswordBranchAndModeChangeClearsSecret() {
         val attempts = mutableListOf<Login>()
         compose.setContent {
-            NotesTheme { ConnectionScreen(onConnect = { server, secret, token, http ->
+            NotesTheme { ConnectionScreen(onConnect = { server, secret, token, http, _ ->
                 attempts += Login(server, secret, token, http)
             }) }
         }
@@ -72,7 +80,7 @@ class ConnectionScreenTest {
     @Test fun plainHttpRequiresExplicitCheckboxBeforeSubmission() {
         val attempts = mutableListOf<Login>()
         compose.setContent {
-            NotesTheme { ConnectionScreen(onConnect = { server, secret, token, http ->
+            NotesTheme { ConnectionScreen(onConnect = { server, secret, token, http, _ ->
                 attempts += Login(server, secret, token, http)
             }) }
         }
@@ -89,7 +97,7 @@ class ConnectionScreenTest {
     @Test fun busyFormCannotResubmitOrChangeCredentials() {
         var busy by mutableStateOf(false)
         var attempts = 0
-        compose.setContent { NotesTheme { ConnectionScreen(busy = busy, onConnect = { _, _, _, _ -> attempts++ }) } }
+        compose.setContent { NotesTheme { ConnectionScreen(busy = busy, onConnect = { _, _, _, _, _ -> attempts++ }) } }
         compose.onNodeWithTag("connection-server").performTextInput("https://notes.example.test")
         compose.onNodeWithTag("connection-secret").performTextInput("synthetic-password")
         compose.runOnIdle { busy = true }
@@ -98,6 +106,63 @@ class ConnectionScreenTest {
         compose.onNodeWithTag("connection-secret").assertIsNotEnabled()
         compose.onNodeWithTag("connection-mode").assertIsNotEnabled()
         compose.runOnIdle { assertEquals(0, attempts) }
+    }
+
+    @Test fun secondFactorIsRequestedByServerAndClearedForRetriesAndCredentialChanges() {
+        var required by mutableStateOf(false)
+        val attempts = mutableListOf<String?>()
+        compose.setContent {
+            NotesTheme {
+                ConnectionScreen(totpRequired = required,
+                    onCredentialsChanged = { required = false },
+                    onConnect = { _, _, _, _, code -> attempts += code; required = true })
+            }
+        }
+        compose.onNodeWithTag("connection-server").performTextInput("https://notes.example.test")
+        compose.onNodeWithTag("connection-secret").performTextInput("synthetic-password")
+        compose.onNodeWithTag("connection-totp").assertDoesNotExist()
+        compose.onNodeWithTag("connection-submit").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(listOf<String?>(null), attempts) }
+        compose.onNodeWithTag("connection-totp").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("connection-submit").assertIsNotEnabled()
+        compose.onNodeWithTag("connection-totp").performTextInput("AAAAAAAAAAAAAAAAAAAAAA==")
+        compose.onNodeWithTag("connection-totp").performImeAction()
+        compose.runOnIdle { assertEquals("AAAAAAAAAAAAAAAAAAAAAA==", attempts.last()) }
+        compose.onNodeWithTag("connection-totp").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.onNodeWithTag("connection-submit").assertIsNotEnabled()
+        compose.onNodeWithTag("connection-totp").performTextInput("012345")
+        compose.onNodeWithTag("connection-secret").performScrollTo().performTextReplacement("new-password")
+        compose.onNodeWithTag("connection-totp").assertDoesNotExist()
+        compose.onNodeWithTag("connection-submit").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(null, attempts.last()) }
+        compose.onNodeWithTag("connection-totp").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.onNodeWithTag("connection-totp").performTextInput("123456")
+        compose.onNodeWithTag("connection-server").performScrollTo().performTextReplacement("https://other.example.test")
+        compose.onNodeWithTag("connection-totp").assertDoesNotExist()
+        compose.onNodeWithTag("connection-submit").performScrollTo().performClick()
+        compose.onNodeWithTag("connection-mode").performScrollTo().performClick()
+        compose.onNodeWithTag("connection-totp").assertDoesNotExist()
+        compose.onNodeWithTag("connection-submit").assertIsNotEnabled()
+    }
+
+    @Test fun recreationRetainsServerButDoesNotRestorePasswordOrSecondFactor() {
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            NotesTheme { ConnectionScreen(totpRequired = true, onConnect = { _, _, _, _, _ -> }) }
+        }
+        compose.onNodeWithTag("connection-server").performTextInput("https://notes.example.test")
+        compose.onNodeWithTag("connection-secret").performTextInput("synthetic-password")
+        compose.onNodeWithTag("connection-totp").performScrollTo().performTextInput("012345")
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithTag("connection-server").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("https://notes.example.test")))
+        compose.onNodeWithTag("connection-secret").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.onNodeWithTag("connection-totp").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.onNodeWithTag("connection-submit").performScrollTo().assertIsNotEnabled()
     }
 
     @Test fun disconnectExplainsPendingChangesAndRequiresConfirmation() {
@@ -122,6 +187,41 @@ class ConnectionScreenTest {
     @Test fun captureLightConnectionAndFolderStates() = captureStates(false)
     @Test fun captureDarkConnectionAndFolderStates() = captureStates(true)
 
+    @Test fun captureRussianSecondFactorForm() = captureSecondFactorForm("ru")
+    @Test fun captureEnglishSecondFactorForm() = captureSecondFactorForm("en")
+
+    private fun captureSecondFactorForm(language: String) {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val previous = AppLanguage.preference(app)
+        AppLanguage.select(app, language)
+        try {
+            compose.setContent {
+                NotesTheme { ConnectionScreen(totpRequired = true, onConnect = { _, _, _, _, _ -> }) }
+            }
+            compose.onNodeWithTag("connection-server").performTextInput("https://notes.example.test")
+            compose.onNodeWithTag("connection-secret").performTextInput("synthetic-password")
+            compose.onNodeWithTag("connection-totp").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithTag("connection-totp").performTextInput("AAAAAAAAAAAAAAAAAAAAAA==")
+            // Done hides the keyboard; the synthetic callback performs no network request.
+            compose.onNodeWithTag("connection-totp").performImeAction()
+            compose.runOnIdle {
+                val activity = ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(Stage.RESUMED).first()
+                val keyboard = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                keyboard.hideSoftInputFromWindow(activity.window.decorView.windowToken, 0)
+                activity.currentFocus?.clearFocus()
+            }
+            compose.onNodeWithTag("connection-submit").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithTag("connection-totp").assertIsDisplayed()
+            compose.onNodeWithText(AppLanguage.get(app, R.string.totp_help)).assertIsDisplayed()
+            screenshot("totp-$language")
+        } finally {
+            if (previous == null) app.getSharedPreferences("app-language", Context.MODE_PRIVATE)
+                .edit().remove("language").commit()
+            else AppLanguage.select(app, previous)
+        }
+    }
+
     private fun captureStates(dark: Boolean) {
         var screen by mutableStateOf("login")
         var busy by mutableStateOf(false)
@@ -137,7 +237,7 @@ class ConnectionScreenTest {
             CompositionLocalProvider(LocalConfiguration provides configuration) {
                 NotesTheme {
                     when (screen) {
-                        "login" -> ConnectionScreen(busy = busy, error = error, onConnect = { _, _, _, _ -> })
+                        "login" -> ConnectionScreen(busy = busy, error = error, onConnect = { _, _, _, _, _ -> })
                         "settings" -> ConnectionSettingsScreen("https://notes.example.test", 3, false, null,
                             onBack = {}, onDisconnect = {})
                         else -> LibraryScreen(

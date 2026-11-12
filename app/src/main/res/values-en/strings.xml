@@ -6,6 +6,8 @@
     <string name="server_example">"https://notes.example.com"</string>
     <string name="etapi_token">"ETAPI token"</string>
     <string name="trilium_password">"Trilium password"</string>
+    <string name="totp_code">Verification code</string>
+    <string name="totp_help">Code from your authenticator app or a Trilium recovery code.</string>
     <string name="hide">"Hide"</string>
     <string name="show">"Show"</string>
     <string name="token_help">"Create a token in Trilium: Settings → ETAPI."</string>

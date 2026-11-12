@@ -70,13 +70,48 @@ class ConnectionLifecycleTest {
                 openFixtureNote()
                 compose.onNodeWithContentDescription("Редактировать заметку").performClick()
                 compose.waitUntil(30_000) {
-                    js("Boolean(window.pocket?.editor && !window.pocket.editor.isReadOnly && document.activeElement.classList.contains('ck-content'))") == "true"
+                    val editorReady = js("Boolean(window.pocket?.editor && !window.pocket.editor.isReadOnly && window.pocketOptions?.keyboardVisible && document.activeElement.classList.contains('ck-content'))") == "true"
+                    var nativeReady = false
+                    compose.runOnIdle {
+                        fun find(view: View): WebView? = if (view is WebView) view else if (view is ViewGroup)
+                            (0 until view.childCount).firstNotNullOfOrNull { find(view.getChildAt(it)) } else null
+                        val resumed = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).firstOrNull()
+                        val web = resumed?.window?.decorView?.let(::find)
+                        nativeReady = web != null && web.alpha >= 0.99f && web.isShown && web.hasFocus()
+                    }
+                    editorReady && nativeReady
                 }
                 instrumentation.sendStringSync(DRAFT)
-                compose.waitUntil(15_000) {
-                    NotesServices.get(app).repository.cachedNote("qa_child")?.let {
-                        it.pending && DRAFT in it.html
-                    } == true
+                try {
+                    compose.waitUntil(15_000) {
+                        NotesServices.get(app).repository.cachedNote("qa_child")?.let {
+                            it.pending && DRAFT in it.html
+                        } == true
+                    }
+                } catch (error: Throwable) {
+                    // This test owns an isolated localhost fixture and synthetic qa_child only.
+                    val dom = runCatching { js("""JSON.stringify({
+                        html: window.pocket?.editor?.getData(),
+                        activeElement: document.activeElement?.outerHTML,
+                        readOnly: window.pocket?.editor?.isReadOnly,
+                        modelChildren: window.pocket?.editor?.model.document.getRoot().childCount,
+                        selectionPath: window.pocket?.editor?.model.document.selection.getFirstPosition()?.path,
+                        previewHtml: document.querySelector('#preview')?.innerHTML
+                    })""") }.getOrElse { "diagnosticError=" + it.javaClass.simpleName }
+                    println("TRILIUM107_LIFECYCLE_DOM=" + dom)
+                    val cached = NotesServices.get(app).repository.cachedNote("qa_child")
+                    println("TRILIUM107_LIFECYCLE_CACHE=" + JSONObject()
+                        .put("noteId", cached?.note?.id).put("pending", cached?.pending)
+                        .put("html", cached?.html).put("syncPendingCount",
+                            NotesServices.get(app).repository.syncState.value.pendingCount))
+                    compose.runOnIdle {
+                        fun find(view: View): WebView? = if (view is WebView) view else if (view is ViewGroup)
+                            (0 until view.childCount).firstNotNullOfOrNull { find(view.getChildAt(it)) } else null
+                        val resumed = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).firstOrNull()
+                        val web = resumed?.window?.decorView?.let(::find)
+                        println("TRILIUM107_LIFECYCLE_NATIVE=alpha:${web?.alpha},shown:${web?.isShown},focus:${web?.hasFocus()},size:${web?.width}x${web?.height}")
+                    }
+                    throw error
                 }
                 assertTrue("The fixture rejects uploads so rotation is exercised with an unsent draft",
                     NotesServices.get(app).repository.syncState.value.pendingCount > 0)

@@ -17,14 +17,18 @@
         error:'Could not open the visual editor. The source text is available below.',
         libraryError:'Editor library could not be loaded', embedded:'Embedded material', embeddedHtml:'Embedded HTML',
         paragraph:'Text', heading:'Heading', plainText:'Plain text',
+        includedNote:'Embedded note', includedExcerpt:'Note excerpt', attachment:'Attachment',
     } : {
         title:'Название', untitled:'Без названия', noteTitle:'Название заметки', source:'Исходный текст', body:'Текст заметки…',
         error:'Не удалось открыть визуальный редактор. Исходный текст доступен ниже.',
         libraryError:'Не удалось загрузить редактор', embedded:'Встроенный материал', embeddedHtml:'Встроенный HTML',
         paragraph:'Текст', heading:'Заголовок', plainText:'Текст',
+        includedNote:'Вложенная заметка', includedExcerpt:'Фрагмент заметки', attachment:'Вложение',
     };
     document.documentElement.lang = language;
     document.documentElement.style.setProperty('--embedded-material', JSON.stringify(text.embedded));
+    for (const name of ['includedNote','includedExcerpt','attachment'])
+        document.documentElement.style.setProperty('--' + name, JSON.stringify(text[name]));
     title.setAttribute('aria-label', text.noteTitle);
     fallback.setAttribute('aria-label', text.source);
     document.getElementById('error').textContent = text.error;
@@ -240,16 +244,39 @@
         document.body.classList.toggle('body-focus', event.target !== title);
     });
     document.addEventListener('click', event => {
+        const include = event.target.closest('figure.include-note, section.include-note');
+        if (include && !event.target.closest('a[href], [data-url], oembed[url], [data-pocket-embed-url]') &&
+            (!options.editing || preview.contains(include))) {
+            event.preventDefault(); event.stopPropagation();
+            const attachmentId = include.getAttribute('data-attachment-id');
+            const noteId = include.getAttribute('data-note-id');
+            if (/^[A-Za-z0-9_]{4,32}$/.test(attachmentId || ''))
+                PocketNative.openLink('api/attachments/' + attachmentId + '/download');
+            else if (/^[A-Za-z0-9_]{4,32}$/.test(noteId || '')) PocketNative.openNote('#root/' + noteId);
+            return;
+        }
         const link = event.target.closest('a[href], [data-url], oembed[url], [data-pocket-embed-url]');
         if (link && (!options.editing || preview.contains(link))) {
             event.preventDefault(); event.stopPropagation();
             const url = link.getAttribute('href') || link.getAttribute('data-url') || link.getAttribute('url') || link.getAttribute('data-pocket-embed-url');
-            if (/^#root\/[A-Za-z0-9_\/-]+$/.test(url)) PocketNative.openNote(url);
+            if (/^#root\/[A-Za-z0-9_\/-]+(?:\?[^#]*)?$/.test(url)) {
+                const params = new URLSearchParams(url.split('?')[1] || '');
+                const attachmentId = params.get('attachmentId');
+                if (/^[A-Za-z0-9_]{4,32}$/.test(attachmentId || '') && params.getAll('attachmentId').length === 1)
+                    PocketNative.openLink('api/attachments/' + attachmentId + '/download');
+                else PocketNative.openNote(url);
+            }
             else if (url.startsWith('#')) {
                 try { document.getElementById(decodeURIComponent(url.slice(1)))?.scrollIntoView({behavior:'smooth'}); } catch (_) { }
             } else PocketNative.openLink(url);
         }
     }, true);
+    document.addEventListener('keydown', event => {
+        if (!options.editing && (event.key === 'Enter' || event.key === ' ') &&
+            event.target.matches('figure.include-note, section.include-note')) {
+            event.preventDefault(); event.target.click();
+        }
+    });
     function configure(next) {
         const wasEditing = !!options.editing;
         if (wasEditing && !next.editing) flush();
@@ -360,6 +387,39 @@
         class PocketBoundary extends C.Plugin {
             afterInit() {
                 const instance = this.editor;
+                // Keep block-reference ownership in the model, including after Enter,
+                // undo and paste. Fixing only the serialized HTML would let a later edit
+                // move the same id to the previously empty half of a split paragraph.
+                let blockOwners = new Map();
+                instance.model.document.registerPostFixer(writer => {
+                    const groups = new Map(), nextOwners = new Map();
+                    const attribute = 'data-trilium-block-id';
+                    for (const item of instance.model.createRangeIn(instance.model.document.getRoot()).getItems()) {
+                        if (!item.is('element')) continue;
+                        for (const [key, bundle] of item.getAttributes()) {
+                            const id = key.startsWith('html') && bundle?.attributes?.[attribute];
+                            if (typeof id !== 'string' || !id) continue;
+                            if (!groups.has(id)) groups.set(id, []);
+                            groups.get(id).push({item, key, bundle});
+                        }
+                    }
+                    const hasContent = item => [...instance.model.createRangeIn(item).getItems()].some(child =>
+                        (child.is('$textProxy') && child.data.trim()) || (child.is('element') && instance.model.schema.isObject(child)));
+                    let changed = false;
+                    groups.forEach((entries, id) => {
+                        const previous = blockOwners.get(id);
+                        let owner = entries.find(entry => entry.item === previous?.item && entry.key === previous?.key) || entries[0];
+                        if (!hasContent(owner.item)) owner = entries.find(entry => hasContent(entry.item)) || owner;
+                        nextOwners.set(id, owner);
+                        for (const entry of entries) if (entry !== owner) {
+                            const attributes = {...entry.bundle.attributes}; delete attributes[attribute];
+                            writer.setAttribute(entry.key, {...entry.bundle, attributes}, entry.item);
+                            changed = true;
+                        }
+                    });
+                    blockOwners = nextOwners;
+                    return changed;
+                });
                 const nativeToView = instance.data.processor.toView.bind(instance.data.processor);
                 if (isMarkdown) {
                     const html = new C.HtmlDataProcessor(instance.data.viewDocument);
@@ -406,6 +466,13 @@
             .map(name => C[name]).filter(Boolean);
         plugins.push(PocketBoundary);
         if (isMarkdown) plugins.push(C.Markdown);
+        const codeLanguages = ['plaintext','javascript','python','bash','json','html','css','sql'];
+        // v0.107 inline sources use both Mermaid and MIME-style language names.
+        // Register the document's names so CodeBlock does not add language-plaintext.
+        parsed(initial.html).querySelectorAll('pre code[class]').forEach(code => {
+            for (const name of code.classList) if (/^language-[A-Za-z0-9_+-]+$/.test(name))
+                codeLanguages.push(name.slice('language-'.length));
+        });
         return C.ClassicEditor.create(document.getElementById('editor'), {
             licenseKey:'GPL', plugins, language,
             translations:language === 'ru' ? [window.CKEDITOR_TRANSLATIONS] : [],
@@ -421,9 +488,8 @@
             link:{addTargetToExternalLinks:false,defaultProtocol:'https://'},
             list:{properties:{styles:true,startIndex:true,reversed:true}},
             root:{placeholder:text.body},
-            codeBlock:{languages:[{language:'plaintext',label:text.plainText},{language:'javascript',label:'JavaScript'},
-                {language:'python',label:'Python'},{language:'bash',label:'Shell'},{language:'json',label:'JSON'},
-                {language:'html',label:'HTML'},{language:'css',label:'CSS'},{language:'sql',label:'SQL'}]},
+            codeBlock:{languages:[...new Set(codeLanguages)].map(language => ({language,
+                label:({plaintext:text.plainText,javascript:'JavaScript',python:'Python',bash:'Shell',json:'JSON',html:'HTML',css:'CSS',sql:'SQL'})[language] || language}))},
         });
     }
     function initializeEditor() {
@@ -468,6 +534,12 @@
     function showPreview(html) {
         // forEditing removes active content and rewrites binary URLs through the existing native boundary.
         preview.innerHTML = forEditing(html, true, true);
+        // Display-only accessibility never enters the editor or saved note source.
+        preview.querySelectorAll('figure.include-note, section.include-note').forEach(node => {
+            node.setAttribute('role', 'link'); node.tabIndex = 0;
+            node.setAttribute('aria-label', node.querySelector('figcaption')?.textContent.trim() ||
+                (node.hasAttribute('data-attachment-id') ? text.attachment : node.hasAttribute('data-block') ? text.includedExcerpt : text.includedNote));
+        });
         // The bundled Markdown parser removes task-list classes. Mark only the
         // preview; the original Markdown and editing pipeline remain untouched.
         if (isMarkdown) preview.querySelectorAll('li input[type="checkbox"]').forEach(input => {
